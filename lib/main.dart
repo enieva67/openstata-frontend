@@ -1,27 +1,71 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
-import 'widgets/dialogs/cleaning_dialog.dart';
+import 'package:flutter/foundation.dart'; 
 
+// Imports de tus servicios y widgets
+import 'services/pdf_service.dart';
+import 'services/logger_service.dart';
+import 'services/process_service.dart'; 
+import 'widgets/dialogs/cleaning_dialog.dart';
+import 'widgets/dialogs/checkbox_params_dialog.dart';
 import 'widgets/sidebar.dart';
 import 'widgets/console.dart';
 import 'widgets/datagrid.dart';
 import 'widgets/dialogs/multi_variable_dialog.dart';
-import 'widgets/results_viewer.dart'; // NUEVO IMPORT
+import 'widgets/results_viewer.dart';
 
-void main() {
+// Función para decodificar JSON en background
+Map<String, dynamic> _decodificarEnBackground(String mensaje) {
+  return jsonDecode(mensaje);
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Inicializamos servicios
+  await LogService.init();
+  
+  // En modo Debug (IDE), esto no hará nada (y está bien, porque tú corres Python aparte)
+  await ProcessService.iniciarBackend();
+
   runApp(const MiStataApp());
 }
 
-class MiStataApp extends StatelessWidget {
+class MiStataApp extends StatefulWidget {
   const MiStataApp({super.key});
 
   @override
+  State<MiStataApp> createState() => _MiStataAppState();
+}
+
+class _MiStataAppState extends State<MiStataApp> with WidgetsBindingObserver {
+  
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      ProcessService.cerrarBackend();
+    }
+  }
+
+   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'OpenStata Doctorado',
+      title: 'OpenStata Evolution',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -33,10 +77,6 @@ class MiStataApp extends StatelessWidget {
   }
 }
 
-Map<String, dynamic> _decodificarEnBackground(String mensaje) {
-  return jsonDecode(mensaje);
-}
-
 class PantallaPrincipal extends StatefulWidget {
   const PantallaPrincipal({super.key});
 
@@ -45,17 +85,19 @@ class PantallaPrincipal extends StatefulWidget {
 }
 
 class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTickerProviderStateMixin {
-  final _canal = WebSocketChannel.connect(Uri.parse('ws://127.0.0.1:8000/ws'));
   
-  // DATOS
+  // --- CONEXIÓN ---
+  WebSocketChannel? _canal;
+  bool _conectado = false;
+  Timer? _timerReconexion;
+
+  // --- ESTADO ---
   final List<String> _logs = []; 
-  Map<String, dynamic>? _datasetRaw; // Solo para la pestaña "Datos"
+  Map<String, dynamic>? _datasetRaw;
   List<String> _columnasDisponibles = [];
-  
-  // RESULTADOS (Lista de análisis hechos)
   final List<Map<String, dynamic>> _historialResultados = [];
 
-  // Paginación Dataset
+  // Paginación
   final int _filasPorPagina = 100;
   int _offsetActual = 0;
   int _totalFilas = 0;
@@ -66,39 +108,83 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   @override
   void initState() {
     super.initState();
-    // AHORA TENEMOS 3 PESTAÑAS: Consola, Datos, Resultados
     _tabController = TabController(length: 3, vsync: this);
-    
-    _canal.stream.listen((mensaje) {
-      _procesarMensaje(mensaje);
-    }, onError: (err) => _agregarLog("Error conexión: $err", esError: true));
+    _conectarConReintentos();
+  }
+
+  void _conectarConReintentos() {
+    if (_conectado) return;
+
+    print("Intentando conectar al WebSocket..."); // Print para ver en consola debug
+
+    try {
+      _canal = WebSocketChannel.connect(Uri.parse('ws://127.0.0.1:8000/ws'));
+      
+      // --- LA SOLUCIÓN AL BLOQUEO ---
+      // Enviamos un mensaje INMEDIATO para "despertar" el flujo.
+      // Si no hacemos esto, Python espera y nosotros esperamos -> Deadlock.
+      _canal!.sink.add("diagnostico"); 
+      // ------------------------------
+
+      _canal!.stream.listen(
+        (mensaje) {
+          // Apenas Python responda al "diagnostico", entramos aquí
+          if (!_conectado) {
+            setState(() => _conectado = true);
+            _agregarLog("Conectado al motor estadístico.");
+          }
+          _procesarMensaje(mensaje);
+        },
+        onError: (error) {
+          if (kDebugMode) print("Error conexión: $error");
+          setState(() => _conectado = false);
+          _reintentarLuego();
+        },
+        onDone: () {
+          setState(() => _conectado = false);
+          _reintentarLuego();
+        },
+      );
+    } catch (e) {
+      if (kDebugMode) print("Fallo al crear canal: $e");
+      _reintentarLuego();
+    }
+  }
+
+  void _reintentarLuego() {
+    if (_timerReconexion != null && _timerReconexion!.isActive) return;
+    _timerReconexion = Timer(const Duration(seconds: 2), _conectarConReintentos);
   }
 
   @override
   void dispose() {
-    _canal.sink.close();
+    _timerReconexion?.cancel();
+    _canal?.sink.close();
     _tabController.dispose();
     super.dispose();
   }
 
-  Future<void> _procesarMensaje(String mensajeRaw) async {
-    final hora = DateTime.now().toString().split(' ')[1];
-    print("[$hora] 1. Mensaje recibido (${mensajeRaw.length} bytes)");
+  void _enviarAlBackend(String jsonCmd) {
+    if (_canal != null && _conectado) {
+      _canal!.sink.add(jsonCmd);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Esperando conexión con Python..."))
+      );
+    }
+  }
 
+  // --- PROCESAMIENTO ---
+  Future<void> _procesarMensaje(String mensajeRaw) async {
     try {
-      // PASO CLAVE: Usamos 'compute' para que el JSON se decodifique en otro hilo
-      // Si el mensaje es gigante, esto evita que la UI se trabe.
       final datos = await compute(_decodificarEnBackground, mensajeRaw);
       
-      print("[$hora] 2. JSON Decodificado en background");
-
       final tipo = datos['tipo'];
       final contenido = datos['contenido'];
 
-      if (!mounted) return; // Seguridad por si el widget se cerró
+      if (!mounted) return;
 
       setState(() {
-        print("[$hora] 3. Iniciando actualización de UI (setState)");
         _cargando = false;
         
         if (tipo == 'texto') {
@@ -108,242 +194,179 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
           _agregarLog(contenido, esError: true);
         } 
         else if (tipo == 'tabla_datos') {
-          print("[$hora] 4. Procesando tabla de datos...");
           _datasetRaw = contenido;
           _columnasDisponibles = List<String>.from(contenido['columns']);
-          
           if (contenido.containsKey('total_rows')) _totalFilas = contenido['total_rows'];
           if (contenido.containsKey('offset')) _offsetActual = contenido['offset'];
           
           if (_offsetActual == 0) _tabController.animateTo(1); 
         } 
         else if (tipo == 'tabla_resumen') {
-             print("[$hora] 4. Procesando nuevo resultado...");
-             Map<String, dynamic> nuevoResultado = {
+             Map<String, dynamic> res = {
                'titulo': "Análisis #${_historialResultados.length + 1}",
                'subtitulo': DateTime.now().toString().split('.')[0],
                'datos': contenido
              };
-
-             // CLAVE: Usamos una lista nueva para forzar a Flutter a detectar el cambio
-             _historialResultados.add(nuevoResultado);
-             
-             // Forzamos un pequeño delay para dejar que la UI respire antes de cambiar de tab
-             Future.delayed(const Duration(milliseconds: 100), () {
-               if(mounted) _tabController.animateTo(2);
-             });
+             _historialResultados.add(res);
+             _irAResultados();
         }
         else if (tipo == 'info_columnas') {
-         // LLEGÓ LA INFO DE SALUD -> ABRIMOS EL DIÁLOGO
-         // 'contenido' es la lista de info: [{'columna': 'Age', 'nulos': 177...}, ...]
-         showDialog(
-           context: context,
-           builder: (ctx) => CleaningDialog(
-             infoColumnas: contenido['info'],
-             onImputar: (col, metodo) {
-               var orden = {
-                 "comando": "transformacion", "accion": "imputar", "columna": col, "metodo": metodo
-               };
-               _canal.sink.add(jsonEncode(orden));
-             },
-             onCodificar: (col) {
-               var orden = {
-                 "comando": "transformacion", "accion": "dummies", "columna": col
-               };
-               _canal.sink.add(jsonEncode(orden));
-             },
-           ),
-         );
-    }
-    else if (tipo == 'grafico') {
-             Map<String, dynamic> nuevoResultado = {
+           _abrirDialogoLimpieza(contenido['info']);
+        }
+        else if (tipo == 'grafico') {
+             Map<String, dynamic> res = {
                'titulo': "Gráfico #${_historialResultados.length + 1}",
                'subtitulo': "Visualización",
-               'tipo': 'imagen', // Marcamos que es imagen
-               'datos': contenido // Aquí viene el string base64 gigante
+               'tipo': 'imagen',
+               'datos': contenido
              };
-             _historialResultados.add(nuevoResultado);
-             
-             Future.delayed(const Duration(milliseconds: 100), () {
-               if(mounted) _tabController.animateTo(2);
-             });
+             _historialResultados.add(res);
+             _irAResultados();
         }
-        print("[$hora] 5. Fin del setState");
       });
-    } catch (e, stackTrace) {
-      print("[$hora] 🛑 ERROR CRÍTICO EN PROCESAMIENTO: $e");
-      print(stackTrace);
-      _agregarLog("Error interno de UI: $e", esError: true);
+    } catch (e) {
+      _agregarLog("Error procesando: $e", esError: true);
     }
+  }
+
+  void _irAResultados() {
+    Future.delayed(const Duration(milliseconds: 100), () {
+       if(mounted) _tabController.animateTo(2);
+    });
   }
   
   void _agregarLog(String texto, {bool esError = false}) {
     if (_logs.length > 200) _logs.removeAt(0);
-    setState(() {
-       _logs.add(esError ? "🛑 $texto" : "PY > $texto");
-    });
+    // Verificación de mounted para evitar errores al salir
+    if (mounted) {
+      setState(() {
+         _logs.add(esError ? "🛑 $texto" : "PY > $texto");
+      });
+    }
   }
 
+  // --- UI ACTIONS ---
   void _enviarComandoManual(String texto) {
     if (texto.trim().isEmpty) return;
     setState(() => _logs.add("YO > $texto"));
-    _canal.sink.add(texto);
+    _enviarAlBackend(texto);
   }
 
   void _solicitarPagina(int nuevoInicio) {
     setState(() => _cargando = true);
-    Map<String, dynamic> orden = {
-      "comando": "paginacion",
-      "inicio": nuevoInicio,
-      "limite": _filasPorPagina
-    };
-    _canal.sink.add(jsonEncode(orden));
+    var orden = {"comando": "paginacion", "inicio": nuevoInicio, "limite": _filasPorPagina};
+    _enviarAlBackend(jsonEncode(orden));
   }
 
   Future<void> _cargarArchivo() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom, allowedExtensions: ['csv'],
-    );
+    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
     if (result != null) {
       setState(() => _cargando = true);
       String ruta = result.files.single.path!.replaceAll(r'\', r'/'); 
-      _canal.sink.add("cargar $ruta");
+      _enviarAlBackend("cargar $ruta");
     }
   }
 
-  // Lógica de menús (Sin cambios importantes aquí)
+  Future<void> _exportarDataset() async {
+    String? ruta = await FilePicker.platform.saveFile(
+      dialogTitle: 'Guardar Dataset', fileName: 'dataset.csv', allowedExtensions: ['csv'], type: FileType.custom
+    );
+    if (ruta != null) {
+      if (!ruta.endsWith('.csv')) ruta += ".csv";
+      _enviarAlBackend(jsonEncode({"comando": "exportar_dataset", "ruta": ruta.replaceAll(r'\', r'/')}));
+    }
+  }
+
+  Future<void> _exportarReportePDF() async {
+    if (_historialResultados.isEmpty) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sin resultados.")));
+      return;
+    }
+    String? ruta = await FilePicker.platform.saveFile(
+      dialogTitle: 'Guardar PDF', fileName: 'reporte.pdf', allowedExtensions: ['pdf'], type: FileType.custom
+    );
+    if (ruta != null) {
+      if (!ruta.endsWith('.pdf')) ruta += ".pdf";
+      _agregarLog("Generando PDF...");
+      await PdfService.generarReporte(ruta, _historialResultados);
+      _agregarLog("✅ PDF guardado.");
+    }
+  }
+
+  // --- DIÁLOGOS ---
   void _manejarClickMenu(String nombre, String comando) {
     if (_columnasDisponibles.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Carga un CSV primero.")));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Carga un CSV primero.")));
       return;
     }
 
     if (comando == "resumen") {
-      _canal.sink.add(jsonEncode({"comando": "analisis", "tipo_analisis": "resumen"}));
-    } else if (comando == "ols_multiple" || comando == "logit") {
-       showDialog(
-        context: context,
-        builder: (ctx) => MultiVariableDialog(
-          titulo: nombre,
-          columnas: _columnasDisponibles,
-          onEjecutar: (y, xList) {
-            var orden = {
-              "comando": "analisis", 
-              "tipo_analisis": comando, // Pasamos "logit" u "ols_multiple"
-              "y": y, 
-              "x": xList
-            };
-            _canal.sink.add(jsonEncode(orden));
-          },
-        ),
-      );
+      _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": "resumen"}));
     } 
     else if (comando == "limpieza_datos") {
-   // Primero pedimos la info, no abrimos el diálogo directo
-   _canal.sink.add(jsonEncode({"comando": "transformacion", "accion": "info_columnas"}));
-   _agregarLog("Analizando salud del dataset...");
-}
- else if (comando == "histograma") {
-      // Necesita 1 variable
+       _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "info_columnas"}));
+       _agregarLog("Analizando salud...");
+    }
+    else if (comando == "histograma") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 1);
     }
-    else if (comando == "scatter") {
-      // Necesita 2 variables (Y vs X)
+    else if (comando == "scatter" || comando == "boxplot") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
     }
-    else if (comando == "boxplot") {
-      // Boxplot puede ser 1 o 2. Usemos el de 2 por ahora (Variable Y, Grupo X)
-      _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
+    else if (["pca", "kmeans", "elbow", "jerarquico"].contains(comando)) {
+       _mostrarDialogoParams(nombre, comando);
     }
- else {
-      _mostrarDialogoVariables(nombre, comando);
+    else if (["ols_multiple", "logit"].contains(comando)) {
+       _mostrarDialogoMultiVariable(nombre, comando);
+    } 
+    else {
+      _mostrarDialogoVariablesSimple(nombre, comando);
     }
   }
-// --- FUNCIÓN INTELIGENTE PARA GRÁFICOS (1 o 2 Variables) ---
-  void _mostrarDialogoVariablesGenerico(String titulo, String comando, {required int numVariables}) {
-    String? v1;
-    String? v2;
 
-    showDialog(
+  void _abrirDialogoLimpieza(List<dynamic> info) {
+     showDialog(
+       context: context,
+       builder: (ctx) => CleaningDialog(
+         infoColumnas: info,
+         onImputar: (col, metodo) => _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "imputar", "columna": col, "metodo": metodo})),
+         onCodificar: (col) => _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "dummies", "columna": col})),
+       ),
+     );
+  }
+
+  void _mostrarDialogoParams(String nombre, String comando) {
+     String labelParam = "Parámetro";
+     int valDefecto = 2;
+     if (comando == "pca") { labelParam = "Componentes (N)"; valDefecto = 2; }
+     if (comando == "kmeans") { labelParam = "Clusters (k)"; valDefecto = 3; }
+     if (comando == "elbow") { labelParam = "Max K"; valDefecto = 10; }
+     if (comando == "jerarquico") { labelParam = "Ignorar"; valDefecto = 0; }
+
+     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setStateDlg) => AlertDialog(
-          title: Row(
-            children: [
-              const Icon(Icons.bar_chart, color: Colors.blueAccent),
-              const SizedBox(width: 10),
-              Text(titulo),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // VARIABLE 1 (Siempre visible)
-              DropdownButtonFormField<String>(
-                decoration: InputDecoration(
-                  labelText: numVariables == 1 ? "Variable (Numérica)" : "Variable Y (Eje Vertical)",
-                  border: const OutlineInputBorder(),
-                ),
-                items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (val) => setStateDlg(() => v1 = val),
-              ),
-              
-              const SizedBox(height: 15),
-
-              // VARIABLE 2 (Solo visible si numVariables >= 2)
-              if (numVariables >= 2)
-                DropdownButtonFormField<String>(
-                  decoration: const InputDecoration(
-                    labelText: "Variable X (Eje Horizontal / Grupo)",
-                    border: OutlineInputBorder(),
-                  ),
-                  items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                  onChanged: (val) => setStateDlg(() => v2 = val),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx), 
-              child: const Text("Cancelar")
-            ),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.brush),
-              label: const Text("Generar Gráfico"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blueAccent,
-                foregroundColor: Colors.white,
-              ),
-              // Lógica de validación:
-              // - Si pide 1 var: Solo v1 debe estar llena.
-              // - Si pide 2 vars: v1 Y v2 deben estar llenas.
-              onPressed: (v1 != null && (numVariables < 2 || v2 != null)) 
-                ? () {
-                    // Construimos la lista de variables a enviar
-                    List<String> varsToSend = [v1!];
-                    if (v2 != null) varsToSend.add(v2!);
-
-                    var orden = {
-                      "comando": "analisis",
-                      "tipo_analisis": comando,
-                      "variables": varsToSend
-                    };
-                    _canal.sink.add(jsonEncode(orden));
-                    Navigator.pop(ctx);
-                    
-                    _agregarLog("Generando gráfico...");
-                  } 
-                : null, // Deshabilita el botón si faltan datos
-            )
-          ],
-        ),
+      builder: (ctx) => CheckboxParamsDialog(
+        titulo: nombre, columnas: _columnasDisponibles, labelParametro: labelParam, valorDefecto: valDefecto,
+        onEjecutar: (varsSel, param) {
+          _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "variables": varsSel, "parametro": param}));
+          _agregarLog("Ejecutando $nombre...");
+        },
       ),
     );
   }
 
-  void _mostrarDialogoVariables(String titulo, String comando) {
-    String? v1;
-    String? v2;
+  void _mostrarDialogoMultiVariable(String nombre, String comando) {
+    showDialog(
+      context: context,
+      builder: (ctx) => MultiVariableDialog(
+        titulo: nombre, columnas: _columnasDisponibles,
+        onEjecutar: (y, xList) => _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "y": y, "x": xList})),
+      ),
+    );
+  }
+
+  void _mostrarDialogoVariablesSimple(String titulo, String comando) {
+    String? v1; String? v2;
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -352,28 +375,65 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String>(
-                decoration: const InputDecoration(labelText: "Variable 1"),
-                items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (val) => setStateDlg(() => v1 = val),
-              ),
+              DropdownButtonFormField<String>(decoration: const InputDecoration(labelText: "Variable 1"), items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (val) => setStateDlg(() => v1 = val)),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
-                decoration: const InputDecoration(labelText: "Variable 2"),
-                items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (val) => setStateDlg(() => v2 = val),
-              ),
+              DropdownButtonFormField<String>(decoration: const InputDecoration(labelText: "Variable 2"), items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (val) => setStateDlg(() => v2 = val)),
             ],
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
             ElevatedButton(
               onPressed: (v1 != null && v2 != null) ? () {
-                var orden = {"comando": "analisis", "tipo_analisis": comando, "variables": [v1, v2]};
-                _canal.sink.add(jsonEncode(orden));
+                _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "variables": [v1!, v2!]}));
                 Navigator.pop(ctx);
               } : null,
               child: const Text("Ejecutar"),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _mostrarDialogoVariablesGenerico(String titulo, String comando, {required int numVariables}) {
+    String? v1; String? v2; String? v3;
+    bool permiteColor = (comando == "scatter");
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setStateDlg) => AlertDialog(
+          title: Row(children: [const Icon(Icons.bar_chart, color: Colors.blue), const SizedBox(width: 10), Text(titulo)]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(decoration: InputDecoration(labelText: numVariables == 1 ? "Variable Principal" : "Eje Y"), items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (val) => setStateDlg(() => v1 = val)),
+              const SizedBox(height: 10),
+              if (numVariables >= 2)
+                DropdownButtonFormField<String>(decoration: const InputDecoration(labelText: "Eje X"), items: _columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (val) => setStateDlg(() => v2 = val)),
+              if (permiteColor) ...[
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: "Color (Opcional)", filled: true, fillColor: Color(0xFFE3F2FD)),
+                  items: [const DropdownMenuItem(value: null, child: Text("--- Sin Agrupación ---")), ..._columnasDisponibles.map((c) => DropdownMenuItem(value: c, child: Text(c)))],
+                  onChanged: (val) => setStateDlg(() => v3 = val),
+                ),
+              ]
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
+            ElevatedButton(
+              onPressed: (v1 != null && (numVariables < 2 || v2 != null)) 
+                ? () {
+                    List<String> vars = [v1!];
+                    if (v2 != null) vars.add(v2!);
+                    if (v3 != null) vars.add(v3!);
+                    _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "variables": vars}));
+                    Navigator.pop(ctx);
+                  } 
+                : null,
+              child: const Text("Generar"),
             )
           ],
         ),
@@ -385,68 +445,48 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("OpenStata Evolution"),
-        backgroundColor: Colors.white,
-        elevation: 1,
+        title: Row(
+          children: [
+            const Text("OpenStata Evolution"),
+            const SizedBox(width: 10),
+            Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _conectado ? Colors.green : Colors.red))
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.folder_open, color: Colors.blueAccent),
-            onPressed: _cargarArchivo,
-            tooltip: "Cargar CSV",
-          ),
-          const SizedBox(width: 15),
+          IconButton(icon: const Icon(Icons.save_alt), onPressed: _exportarDataset),
+          IconButton(icon: const Icon(Icons.picture_as_pdf), onPressed: _exportarReportePDF),
+          IconButton(icon: const Icon(Icons.folder_open), onPressed: _cargarArchivo),
         ],
       ),
-      body: Row(
-        children: [
-          // 1. Sidebar
-          SidebarMenu(onOpcionSeleccionada: _manejarClickMenu),
-
-          // 2. Área Principal (3 PESTAÑAS)
-          Expanded(
-            child: _cargando 
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
+      body: _conectado 
+        ? Row(
+            children: [
+              SidebarMenu(onOpcionSeleccionada: _manejarClickMenu),
+              Expanded(
+                child: Column(
                   children: [
                     Container(
                       color: Colors.grey[200],
-                      child: TabBar(
-                        controller: _tabController,
-                        labelColor: Colors.blue[800],
-                        indicatorColor: Colors.blue[800],
-                        tabs: const [
-                          Tab(text: "Consola"),
-                          Tab(text: "Dataset (Datos)"),
-                          Tab(text: "Resultados"),
-                        ],
-                      ),
+                      child: TabBar(controller: _tabController, labelColor: Colors.blue[800], tabs: const [Tab(text: "Consola"), Tab(text: "Datos"), Tab(text: "Resultados")]),
                     ),
                     Expanded(
                       child: TabBarView(
                         controller: _tabController,
                         children: [
-                          // A. CONSOLA
                           ConsoleWidget(logs: _logs, onEnviarComando: _enviarComandoManual),
-                          
-                          // B. DATASET (RAW DATA)
-                          DataGrid(
-                            data: _datasetRaw,
-                            offset: _offsetActual,
-                            totalRows: _totalFilas,
-                            filasPorPagina: _filasPorPagina,
-                            onPageChanged: _solicitarPagina,
-                          ),
-                          
-                          // C. RESULTADOS (PESTAÑAS INTERNAS)
+                          DataGrid(data: _datasetRaw, offset: _offsetActual, totalRows: _totalFilas, filasPorPagina: _filasPorPagina, onPageChanged: _solicitarPagina),
                           ResultsViewer(listaResultados: _historialResultados),
                         ],
                       ),
                     ),
                   ],
                 ),
+              ),
+            ],
+          )
+        : const Center(
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [CircularProgressIndicator(), SizedBox(height: 20), Text("Esperando al motor estadístico...")]),
           ),
-        ],
-      ),
     );
   }
 }

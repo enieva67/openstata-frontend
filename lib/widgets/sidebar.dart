@@ -43,7 +43,15 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("ANOVA", "anova"),
           ]),
 
-          _crearAcordeon("No Paramétricas", Icons.graphic_eq, [
+          _crearAcordeon("Multivariado / ML", Icons.hub, [
+        _crearOpcion("PCA (Biplot)", "pca"),
+        _crearOpcion("K-Means Clustering", "kmeans"),
+         _crearOpcion("PCA (Componentes Princ.)", "pca"),
+        _crearOpcion("Método del Codo (Elbow)", "elbow"),
+        _crearOpcion("Cluster Jerárquico", "jerarquico"),
+      ]),
+
+             _crearAcordeon("No Paramétricas", Icons.graphic_eq, [
             _crearOpcion("Mann-Whitney U", "mannwhitney"),
             _crearOpcion("Kruskal-Wallis", "kruskal"),
           ]),

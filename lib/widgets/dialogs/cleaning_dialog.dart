@@ -43,7 +43,7 @@ class _CleaningDialogState extends State<CleaningDialog> {
             const Text("1. Selecciona Variable a Tratar:"),
             DropdownButtonFormField<String>(
               isExpanded: true,
-              value: columnaSeleccionada,
+              initialValue: columnaSeleccionada,
               items: widget.infoColumnas.map<DropdownMenuItem<String>>((info) {
                 // Si tiene nulos, le ponemos un icono de advertencia
                 int nulos = info['nulos'];
@@ -82,7 +82,7 @@ class _CleaningDialogState extends State<CleaningDialog> {
                       const Text("⚠️ Se detectaron valores perdidos", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 5),
                       DropdownButtonFormField<String>(
-                        value: metodoImputacion,
+                        initialValue: metodoImputacion,
                         decoration: const InputDecoration(labelText: "Método de Relleno"),
                         items: const [
                           DropdownMenuItem(value: "media", child: Text("Rellenar con Media (Promedio)")),
