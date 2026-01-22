@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:frontend/widgets/dialogs/graphic_config_dialog.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'; 
-
+import 'widgets/dialogs/hierarchical_dialog.dart';
 // Imports de tus servicios y widgets
 import 'services/pdf_service.dart';
 import 'services/logger_service.dart';
@@ -313,12 +314,65 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     else if (comando == "scatter" || comando == "boxplot") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
     }
-    else if (["pca", "kmeans", "elbow", "jerarquico"].contains(comando)) {
+    else if (["pca", "kmeans", "elbow"].contains(comando)) {
        _mostrarDialogoParams(nombre, comando);
     }
-    else if (["ols_multiple", "logit"].contains(comando)) {
+    else if (comando == "jerarquico") {
+       showDialog(
+         context: context,
+         builder: (ctx) => HierarchicalDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (vars, metodo, k) {
+             var orden = {
+               "comando": "analisis",
+               "tipo_analisis": "jerarquico",
+               "variables": vars,
+               "metodo": metodo,
+               "parametro": k // Usamos parametro para enviar K
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando Dendrograma ($metodo)...");
+           }
+         )
+       );
+    }
+    else if (["ols_multiple", "logit", "roc_analysis"].contains(comando)) {
        _mostrarDialogoMultiVariable(nombre, comando);
     } 
+        // CASO HEATMAP (Matriz de correlación)
+    else if (comando == "heatmap") {
+       showDialog(
+        context: context,
+        builder: (ctx) => CheckboxParamsDialog(
+          titulo: "Variables para Matriz",
+          columnas: _columnasDisponibles,
+          showInput: false, // <--- ¡LA SOLUCIÓN! Ocultamos el campo numérico
+          onEjecutar: (varsSel, _) { // El '_' significa que ignoramos el parámetro
+            var orden = {
+              "comando": "analisis",
+              "tipo_analisis": "heatmap",
+              "variables": varsSel
+            };
+            _enviarAlBackend(jsonEncode(orden));
+            _agregarLog("Generando Heatmap...");
+          },
+        ),
+      );
+    }
+    else if (comando == "config_graficos") {
+       showDialog(
+         context: context,
+         builder: (ctx) => GraphicConfigDialog(
+           onAplicar: (s, p, c) {
+             var orden = {
+               "comando": "config_graficos",
+               "estilo": s, "paleta": p, "contexto": c
+             };
+             _enviarAlBackend(jsonEncode(orden));
+           }
+         )
+       );
+    }
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
     }
@@ -330,7 +384,15 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
        builder: (ctx) => CleaningDialog(
          infoColumnas: info,
          onImputar: (col, metodo) => _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "imputar", "columna": col, "metodo": metodo})),
-         onCodificar: (col) => _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "dummies", "columna": col})),
+         onCodificar: (col, mantener) { // Agrega 'mantener'
+           var orden = {
+             "comando": "transformacion", 
+             "accion": "dummies", 
+             "columna": col, 
+             "mantener_original": mantener // Enviamos al backend
+           };
+           _enviarAlBackend(jsonEncode(orden));
+         },
        ),
      );
   }
@@ -338,17 +400,34 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   void _mostrarDialogoParams(String nombre, String comando) {
      String labelParam = "Parámetro";
      int valDefecto = 2;
+     bool inputVisible = true; // Por defecto visible
+
      if (comando == "pca") { labelParam = "Componentes (N)"; valDefecto = 2; }
      if (comando == "kmeans") { labelParam = "Clusters (k)"; valDefecto = 3; }
      if (comando == "elbow") { labelParam = "Max K"; valDefecto = 10; }
-     if (comando == "jerarquico") { labelParam = "Ignorar"; valDefecto = 0; }
+     
+     // Para Jerárquico, el parámetro a veces sobra, podríamos ocultarlo también si quisieras
+     if (comando == "jerarquico") { 
+         // Ocultemos el input para jerarquico también, ya que el dendrograma muestra todo
+         inputVisible = false; 
+     }
 
      showDialog(
       context: context,
       builder: (ctx) => CheckboxParamsDialog(
-        titulo: nombre, columnas: _columnasDisponibles, labelParametro: labelParam, valorDefecto: valDefecto,
+        titulo: "Configurar $nombre",
+        columnas: _columnasDisponibles,
+        labelParametro: labelParam,
+        valorDefecto: valDefecto,
+        showInput: inputVisible, // <--- Pasamos la bandera
         onEjecutar: (varsSel, param) {
-          _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "variables": varsSel, "parametro": param}));
+          var orden = {
+            "comando": "analisis",
+            "tipo_analisis": comando,
+            "variables": varsSel,
+            "parametro": param
+          };
+          _enviarAlBackend(jsonEncode(orden));
           _agregarLog("Ejecutando $nombre...");
         },
       ),

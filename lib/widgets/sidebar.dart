@@ -24,8 +24,10 @@ class SidebarMenu extends StatelessWidget {
 
           _crearAcordeon("Gráficos", Icons.pie_chart, [
             _crearOpcion("Histograma", "histograma"),
+            _crearOpcion("Mapa de Calor (Heatmap)", "heatmap"),
             _crearOpcion("Scatter Plot (Dispersión)", "scatter"),
             _crearOpcion("Boxplot (Cajas)", "boxplot"),
+            _crearOpcion("Configurar Estilos Gráficos", "config_graficos")
           ]),
 
           _crearAcordeon("Gestión de Datos", Icons.build, [
@@ -57,6 +59,7 @@ class SidebarMenu extends StatelessWidget {
           ]),
 
           _crearAcordeon("Modelos Lineales", Icons.trending_up, [
+            _crearOpcion("Análisis ROC & Métricas", "roc_analysis"),
             _crearOpcion("Regresión Lineal Simple", "ols_simple"),
             _crearOpcion("Regresión Múltiple", "ols_multiple"), // Preparando terreno
             _crearOpcion("Regresión Logística", "logit"),

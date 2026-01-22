@@ -3,16 +3,18 @@ import 'package:flutter/material.dart';
 class CheckboxParamsDialog extends StatefulWidget {
   final String titulo;
   final List<String> columnas;
-  final String labelParametro; // Ej: "Número de Clusters (k)"
+  final String labelParametro; 
   final int valorDefecto;
+  final bool showInput; // <--- NUEVO: ¿Mostramos el input numérico?
   final Function(List<String> vars, int param) onEjecutar;
 
   const CheckboxParamsDialog({
     super.key,
     required this.titulo,
     required this.columnas,
-    required this.labelParametro,
-    required this.valorDefecto,
+    this.labelParametro = "Parámetro",
+    this.valorDefecto = 0,
+    this.showInput = true, // Por defecto SÍ (para PCA, Kmeans)
     required this.onEjecutar,
   });
 
@@ -46,21 +48,23 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. CONFIGURACIÓN DEL PARÁMETRO
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(5)),
-              child: TextField(
-                controller: _paramController,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: widget.labelParametro,
-                  border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.tune),
+            // 1. CONFIGURACIÓN DEL PARÁMETRO (SOLO SI showInput es TRUE)
+            if (widget.showInput) ...[
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(5)),
+                child: TextField(
+                  controller: _paramController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: widget.labelParametro,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.tune),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 15),
+              const SizedBox(height: 15),
+            ],
 
             // 2. SELECCIÓN DE VARIABLES
             const Text("Selecciona Variables (Numéricas):", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -78,8 +82,11 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
                       dense: true,
                       onChanged: (val) {
                         setState(() {
-                          if (val == true) seleccionadas.add(col);
-                          else seleccionadas.remove(col);
+                          if (val == true) {
+                            seleccionadas.add(col);
+                          } else {
+                            seleccionadas.remove(col);
+                          }
                         });
                       },
                     );
@@ -96,13 +103,24 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+        
         ElevatedButton(
+          // Habilitar botón si hay al menos 2 variables
           onPressed: seleccionadas.length >= 2 ? () {
-            int? param = int.tryParse(_paramController.text);
-            if (param != null && param > 0) {
-              widget.onEjecutar(seleccionadas, param);
-              Navigator.pop(context);
+            int param = 0;
+            
+            // Si hay input, validamos lo que escribió el usuario
+            if (widget.showInput) {
+               int? p = int.tryParse(_paramController.text);
+               if (p == null || p <= 0) return; // Si escribió basura, no hace nada
+               param = p;
+            } else {
+               // Si NO hay input (Heatmap), usamos el valor por defecto invisiblemente
+               param = widget.valorDefecto;
             }
+
+            widget.onEjecutar(seleccionadas, param);
+            Navigator.pop(context);
           } : null,
           child: const Text("Ejecutar"),
         )

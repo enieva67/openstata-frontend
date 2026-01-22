@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 class CleaningDialog extends StatefulWidget {
-  final List<dynamic> infoColumnas; // Recibiremos [{columna: "Age", nulos: 177, tipo: "float"}, ...]
+  final List<dynamic> infoColumnas;
   final Function(String col, String metodo) onImputar;
-  final Function(String col) onCodificar;
+  
+  // CORRECCIÓN: Ahora aceptamos String Y Bool
+  final Function(String col, bool mantenerOriginal) onCodificar; 
 
   const CleaningDialog({
     super.key,
@@ -17,6 +19,7 @@ class CleaningDialog extends StatefulWidget {
 }
 
 class _CleaningDialogState extends State<CleaningDialog> {
+  bool conservarOriginal = false;
   String? columnaSeleccionada;
   String metodoImputacion = "media"; // Default
 
@@ -113,6 +116,15 @@ class _CleaningDialogState extends State<CleaningDialog> {
                     // OPCIÓN B: CODIFICAR (Si es texto)
                     if (esTexto) ...[
                       const Text("🔤 Variable Categórica Detectada", style: TextStyle(fontWeight: FontWeight.bold)),
+                      // NUEVO CHECKBOX
+                      CheckboxListTile(
+                        title: const Text("Conservar variable original"),
+                        subtitle: const Text("Útil para comparar, pero cuidado con duplicados."),
+                        value: conservarOriginal,
+                        onChanged: (val) => setState(() => conservarOriginal = val!),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                      ),
                       const Text("Necesaria para regresiones.", style: TextStyle(fontSize: 12)),
                       const SizedBox(height: 10),
                       SizedBox(
@@ -122,7 +134,8 @@ class _CleaningDialogState extends State<CleaningDialog> {
                           icon: const Icon(Icons.code),
                           label: const Text("Convertir a Dummies (0/1)"),
                           onPressed: () {
-                            widget.onCodificar(columnaSeleccionada!);
+                            // Pasamos el booleano al callback (tendrás que actualizar la firma del callback arriba)
+                            widget.onCodificar(columnaSeleccionada!, conservarOriginal);
                             Navigator.pop(context);
                           },
                         ),
