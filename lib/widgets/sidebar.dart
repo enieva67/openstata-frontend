@@ -44,7 +44,9 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("Prueba T (Indep.)", "ttest_ind"),
             _crearOpcion("ANOVA", "anova"),
           ]),
-
+          _crearAcordeon("Machine Learning Pro", Icons.psychology, [
+            _crearOpcion("Entrenar Modelo (RF/XGB)", "ml_training"),
+          ]),
           _crearAcordeon("Multivariado / ML", Icons.hub, [
         _crearOpcion("PCA (Biplot)", "pca"),
         _crearOpcion("K-Means Clustering", "kmeans"),
@@ -52,7 +54,10 @@ class SidebarMenu extends StatelessWidget {
         _crearOpcion("Método del Codo (Elbow)", "elbow"),
         _crearOpcion("Cluster Jerárquico", "jerarquico"),
       ]),
-
+          _crearAcordeon("Datasets de Prueba", Icons.science, [
+            _crearOpcion("California Housing (Difícil)", "ejemplo_california"),
+            _crearOpcion("Breast Cancer (Clásico)", "ejemplo_cancer"),
+          ]),
              _crearAcordeon("No Paramétricas", Icons.graphic_eq, [
             _crearOpcion("Mann-Whitney U", "mannwhitney"),
             _crearOpcion("Kruskal-Wallis", "kruskal"),

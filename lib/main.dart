@@ -1,24 +1,28 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:frontend/widgets/dialogs/graphic_config_dialog.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'widgets/dialogs/ml_training_dialog.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'; 
-import 'widgets/dialogs/hierarchical_dialog.dart';
-// Imports de tus servicios y widgets
+
+// --- IMPORTS DE TUS SERVICIOS Y WIDGETS ---
 import 'services/pdf_service.dart';
 import 'services/logger_service.dart';
 import 'services/process_service.dart'; 
-import 'widgets/dialogs/cleaning_dialog.dart';
-import 'widgets/dialogs/checkbox_params_dialog.dart';
+
 import 'widgets/sidebar.dart';
 import 'widgets/console.dart';
 import 'widgets/datagrid.dart';
-import 'widgets/dialogs/multi_variable_dialog.dart';
 import 'widgets/results_viewer.dart';
 
-// Función para decodificar JSON en background
+import 'widgets/dialogs/cleaning_dialog.dart';
+import 'widgets/dialogs/checkbox_params_dialog.dart';
+import 'widgets/dialogs/multi_variable_dialog.dart';
+import 'widgets/dialogs/hierarchical_dialog.dart';
+import 'widgets/dialogs/graphic_config_dialog.dart'; // Importante para la config de gráficos
+
+// Función global para decodificar JSON en background (evita congelar UI)
 Map<String, dynamic> _decodificarEnBackground(String mensaje) {
   return jsonDecode(mensaje);
 }
@@ -26,10 +30,11 @@ Map<String, dynamic> _decodificarEnBackground(String mensaje) {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inicializamos servicios
+  // 1. Iniciar el sistema de Logs (Vital para depurar el .exe)
   await LogService.init();
   
-  // En modo Debug (IDE), esto no hará nada (y está bien, porque tú corres Python aparte)
+  // 2. Arrancar el Backend Python (Solo funciona en modo Release/Empaquetado)
+  // En modo Debug (IDE), esta función no hace nada y te deja correr Python manual.
   await ProcessService.iniciarBackend();
 
   runApp(const MiStataApp());
@@ -58,6 +63,7 @@ class _MiStataAppState extends State<MiStataApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Aseguramos matar el proceso de Python al cerrar la ventana
     if (state == AppLifecycleState.detached) {
       ProcessService.cerrarBackend();
     }
@@ -92,7 +98,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   bool _conectado = false;
   Timer? _timerReconexion;
 
-  // --- ESTADO ---
+  // --- ESTADO DE DATOS ---
   final List<String> _logs = []; 
   Map<String, dynamic>? _datasetRaw;
   List<String> _columnasDisponibles = [];
@@ -110,50 +116,58 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    // Iniciamos el intento de conexión persistente
     _conectarConReintentos();
   }
 
+  // --- LÓGICA DE CONEXIÓN RESILIENTE ---
   void _conectarConReintentos() {
     if (_conectado) return;
 
-    print("Intentando conectar al WebSocket..."); // Print para ver en consola debug
+    // Usamos LogService en lugar de print para ver esto en el archivo .log
+    LogService.info("Intentando conectar al WebSocket (ws://127.0.0.1:8000/ws)...");
 
     try {
       _canal = WebSocketChannel.connect(Uri.parse('ws://127.0.0.1:8000/ws'));
       
-      // --- LA SOLUCIÓN AL BLOQUEO ---
-      // Enviamos un mensaje INMEDIATO para "despertar" el flujo.
-      // Si no hacemos esto, Python espera y nosotros esperamos -> Deadlock.
+      // *** EL SECRETO DEL ÉXITO ***
+      // Enviamos "diagnostico" inmediatamente. 
+      // Si Python está listo, responderá y activará el 'listen'.
+      // Si no, el error disparará el reintento.
       _canal!.sink.add("diagnostico"); 
-      // ------------------------------
 
       _canal!.stream.listen(
         (mensaje) {
-          // Apenas Python responda al "diagnostico", entramos aquí
+          // Si recibimos CUALQUIER mensaje, es que estamos dentro
           if (!_conectado) {
             setState(() => _conectado = true);
-            _agregarLog("Conectado al motor estadístico.");
+            LogService.info("✅ Conexión establecida con el motor Python.");
+            _agregarLog("Motor estadístico conectado.");
           }
           _procesarMensaje(mensaje);
         },
         onError: (error) {
-          if (kDebugMode) print("Error conexión: $error");
+          // Si falla, es normal durante los primeros segundos de arranque
+          LogService.info("Fallo de conexión (Python aun cargando...): $error");
           setState(() => _conectado = false);
           _reintentarLuego();
         },
         onDone: () {
+          LogService.info("El servidor cerró la conexión.");
           setState(() => _conectado = false);
           _reintentarLuego();
         },
       );
     } catch (e) {
-      if (kDebugMode) print("Fallo al crear canal: $e");
+      LogService.error("Error crítico creando canal WebSocket", e);
       _reintentarLuego();
     }
   }
 
   void _reintentarLuego() {
     if (_timerReconexion != null && _timerReconexion!.isActive) return;
+    
+    // Reintentar cada 2 segundos permite que Python tenga tiempo de cargar Pandas
     _timerReconexion = Timer(const Duration(seconds: 2), _conectarConReintentos);
   }
 
@@ -170,12 +184,12 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
       _canal!.sink.add(jsonCmd);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Esperando conexión con Python..."))
+        const SnackBar(content: Text("Esperando conexión con el motor..."))
       );
     }
   }
 
-  // --- PROCESAMIENTO ---
+  // --- PROCESAMIENTO DE MENSAJES ---
   Future<void> _procesarMensaje(String mensajeRaw) async {
     try {
       final datos = await compute(_decodificarEnBackground, mensajeRaw);
@@ -197,6 +211,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
         else if (tipo == 'tabla_datos') {
           _datasetRaw = contenido;
           _columnasDisponibles = List<String>.from(contenido['columns']);
+          
           if (contenido.containsKey('total_rows')) _totalFilas = contenido['total_rows'];
           if (contenido.containsKey('offset')) _offsetActual = contenido['offset'];
           
@@ -226,7 +241,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
         }
       });
     } catch (e) {
-      _agregarLog("Error procesando: $e", esError: true);
+      LogService.error("Error procesando mensaje del backend", e);
+      _agregarLog("Error de procesamiento interno.", esError: true);
     }
   }
 
@@ -238,7 +254,6 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   
   void _agregarLog(String texto, {bool esError = false}) {
     if (_logs.length > 200) _logs.removeAt(0);
-    // Verificación de mounted para evitar errores al salir
     if (mounted) {
       setState(() {
          _logs.add(esError ? "🛑 $texto" : "PY > $texto");
@@ -246,7 +261,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     }
   }
 
-  // --- UI ACTIONS ---
+  // --- ACCIONES UI ---
   void _enviarComandoManual(String texto) {
     if (texto.trim().isEmpty) return;
     setState(() => _logs.add("YO > $texto"));
@@ -260,7 +275,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   }
 
   Future<void> _cargarArchivo() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom, allowedExtensions: ['csv'],
+    );
     if (result != null) {
       setState(() => _cargando = true);
       String ruta = result.files.single.path!.replaceAll(r'\', r'/'); 
@@ -270,7 +287,10 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
 
   Future<void> _exportarDataset() async {
     String? ruta = await FilePicker.platform.saveFile(
-      dialogTitle: 'Guardar Dataset', fileName: 'dataset.csv', allowedExtensions: ['csv'], type: FileType.custom
+      dialogTitle: 'Guardar Dataset Limpio',
+      fileName: 'dataset_limpio.csv',
+      allowedExtensions: ['csv'],
+      type: FileType.custom,
     );
     if (ruta != null) {
       if (!ruta.endsWith('.csv')) ruta += ".csv";
@@ -280,22 +300,42 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
 
   Future<void> _exportarReportePDF() async {
     if (_historialResultados.isEmpty) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sin resultados.")));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No hay resultados para exportar.")));
       return;
     }
     String? ruta = await FilePicker.platform.saveFile(
-      dialogTitle: 'Guardar PDF', fileName: 'reporte.pdf', allowedExtensions: ['pdf'], type: FileType.custom
+      dialogTitle: 'Exportar Reporte PDF',
+      fileName: 'reporte_analisis.pdf',
+      allowedExtensions: ['pdf'],
+      type: FileType.custom,
     );
     if (ruta != null) {
       if (!ruta.endsWith('.pdf')) ruta += ".pdf";
       _agregarLog("Generando PDF...");
-      await PdfService.generarReporte(ruta, _historialResultados);
-      _agregarLog("✅ PDF guardado.");
+      try {
+        await PdfService.generarReporte(ruta, _historialResultados);
+        _agregarLog("✅ PDF guardado: $ruta");
+      } catch (e) {
+        _agregarLog("Error PDF: $e", esError: true);
+      }
     }
   }
 
-  // --- DIÁLOGOS ---
+  // --- GESTIÓN DE DIÁLOGOS Y MENÚS ---
   void _manejarClickMenu(String nombre, String comando) {
+    if (comando == "ejemplo_california") {
+       _enviarAlBackend(jsonEncode({"comando": "cargar_ejemplo", "nombre": "california"}));
+       _agregarLog("Solicitando California Housing...");
+       return; // Salimos de la función aquí
+    }
+    
+    if (comando == "ejemplo_cancer") {
+       _enviarAlBackend(jsonEncode({"comando": "cargar_ejemplo", "nombre": "cancer"}));
+       _agregarLog("Solicitando Breast Cancer...");
+       return; // Salimos aquí
+    }
+
+    // --- BARRERA DE SEGURIDAD ---
     if (_columnasDisponibles.isEmpty) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Carga un CSV primero.")));
       return;
@@ -306,17 +346,39 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     } 
     else if (comando == "limpieza_datos") {
        _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "info_columnas"}));
-       _agregarLog("Analizando salud...");
+       _agregarLog("Analizando salud del dataset...");
     }
+    // Gráficos
     else if (comando == "histograma") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 1);
     }
     else if (comando == "scatter" || comando == "boxplot") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
     }
+    // Multivariado con parámetros
     else if (["pca", "kmeans", "elbow"].contains(comando)) {
        _mostrarDialogoParams(nombre, comando);
     }
+    else if (comando == "ml_training") {
+       showDialog(
+         context: context,
+         builder: (ctx) => MLTrainingDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (y, xList, algo) {
+             var orden = {
+               "comando": "analisis",
+               "tipo_analisis": "ml_training",
+               "y": y,
+               "x": xList,
+               "algoritmo": algo
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Entrenando modelo ($algo)...");
+           }
+         )
+       );
+    }
+    // Cluster Jerárquico (Tiene diálogo propio)
     else if (comando == "jerarquico") {
        showDialog(
          context: context,
@@ -328,7 +390,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
                "tipo_analisis": "jerarquico",
                "variables": vars,
                "metodo": metodo,
-               "parametro": k // Usamos parametro para enviar K
+               "parametro": k 
              };
              _enviarAlBackend(jsonEncode(orden));
              _agregarLog("Calculando Dendrograma ($metodo)...");
@@ -336,47 +398,45 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          )
        );
     }
+    // Regresiones y Clasificación
     else if (["ols_multiple", "logit", "roc_analysis"].contains(comando)) {
        _mostrarDialogoMultiVariable(nombre, comando);
     } 
-        // CASO HEATMAP (Matriz de correlación)
+    // Heatmap (Checkbox sin input numérico)
     else if (comando == "heatmap") {
        showDialog(
         context: context,
         builder: (ctx) => CheckboxParamsDialog(
           titulo: "Variables para Matriz",
           columnas: _columnasDisponibles,
-          showInput: false, // <--- ¡LA SOLUCIÓN! Ocultamos el campo numérico
-          onEjecutar: (varsSel, _) { // El '_' significa que ignoramos el parámetro
-            var orden = {
-              "comando": "analisis",
-              "tipo_analisis": "heatmap",
-              "variables": varsSel
-            };
+          showInput: false, 
+          onEjecutar: (varsSel, _) { 
+            var orden = {"comando": "analisis", "tipo_analisis": "heatmap", "variables": varsSel};
             _enviarAlBackend(jsonEncode(orden));
             _agregarLog("Generando Heatmap...");
           },
         ),
       );
     }
+    // Configuración Global
     else if (comando == "config_graficos") {
        showDialog(
          context: context,
          builder: (ctx) => GraphicConfigDialog(
            onAplicar: (s, p, c) {
-             var orden = {
-               "comando": "config_graficos",
-               "estilo": s, "paleta": p, "contexto": c
-             };
+             var orden = {"comando": "config_graficos", "estilo": s, "paleta": p, "contexto": c};
              _enviarAlBackend(jsonEncode(orden));
            }
          )
        );
     }
+    
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
     }
   }
+
+  // --- HELPERS PARA ABRIR DIÁLOGOS ---
 
   void _abrirDialogoLimpieza(List<dynamic> info) {
      showDialog(
@@ -384,13 +444,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
        builder: (ctx) => CleaningDialog(
          infoColumnas: info,
          onImputar: (col, metodo) => _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "imputar", "columna": col, "metodo": metodo})),
-         onCodificar: (col, mantener) { // Agrega 'mantener'
-           var orden = {
-             "comando": "transformacion", 
-             "accion": "dummies", 
-             "columna": col, 
-             "mantener_original": mantener // Enviamos al backend
-           };
+         onCodificar: (col, mantener) { 
+           var orden = {"comando": "transformacion", "accion": "dummies", "columna": col, "mantener_original": mantener};
            _enviarAlBackend(jsonEncode(orden));
          },
        ),
@@ -400,17 +455,11 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   void _mostrarDialogoParams(String nombre, String comando) {
      String labelParam = "Parámetro";
      int valDefecto = 2;
-     bool inputVisible = true; // Por defecto visible
+     bool inputVisible = true;
 
      if (comando == "pca") { labelParam = "Componentes (N)"; valDefecto = 2; }
      if (comando == "kmeans") { labelParam = "Clusters (k)"; valDefecto = 3; }
      if (comando == "elbow") { labelParam = "Max K"; valDefecto = 10; }
-     
-     // Para Jerárquico, el parámetro a veces sobra, podríamos ocultarlo también si quisieras
-     if (comando == "jerarquico") { 
-         // Ocultemos el input para jerarquico también, ya que el dendrograma muestra todo
-         inputVisible = false; 
-     }
 
      showDialog(
       context: context,
@@ -419,14 +468,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
         columnas: _columnasDisponibles,
         labelParametro: labelParam,
         valorDefecto: valDefecto,
-        showInput: inputVisible, // <--- Pasamos la bandera
+        showInput: inputVisible,
         onEjecutar: (varsSel, param) {
-          var orden = {
-            "comando": "analisis",
-            "tipo_analisis": comando,
-            "variables": varsSel,
-            "parametro": param
-          };
+          var orden = {"comando": "analisis", "tipo_analisis": comando, "variables": varsSel, "parametro": param};
           _enviarAlBackend(jsonEncode(orden));
           _agregarLog("Ejecutando $nombre...");
         },
@@ -438,8 +482,12 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     showDialog(
       context: context,
       builder: (ctx) => MultiVariableDialog(
-        titulo: nombre, columnas: _columnasDisponibles,
-        onEjecutar: (y, xList) => _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "y": y, "x": xList})),
+        titulo: nombre,
+        columnas: _columnasDisponibles,
+        onEjecutar: (y, xList) {
+          var orden = {"comando": "analisis", "tipo_analisis": comando, "y": y, "x": xList};
+          _enviarAlBackend(jsonEncode(orden));
+        },
       ),
     );
   }
@@ -528,13 +576,19 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
           children: [
             const Text("OpenStata Evolution"),
             const SizedBox(width: 10),
-            Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _conectado ? Colors.green : Colors.red))
+            // Indicador de estado
+            Tooltip(
+              message: _conectado ? "Conectado" : "Buscando servidor...",
+              child: Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _conectado ? Colors.green : Colors.redAccent))
+            )
           ],
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.save_alt), onPressed: _exportarDataset),
-          IconButton(icon: const Icon(Icons.picture_as_pdf), onPressed: _exportarReportePDF),
-          IconButton(icon: const Icon(Icons.folder_open), onPressed: _cargarArchivo),
+          IconButton(icon: const Icon(Icons.save_alt, color: Colors.green), onPressed: _exportarDataset, tooltip: "Guardar CSV"),
+          IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.redAccent), onPressed: _exportarReportePDF, tooltip: "Guardar PDF"),
+          const SizedBox(width: 10),
+          IconButton(icon: const Icon(Icons.folder_open, color: Colors.blueAccent), onPressed: _cargarArchivo, tooltip: "Abrir CSV"),
+          const SizedBox(width: 15),
         ],
       ),
       body: _conectado 
@@ -564,7 +618,15 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
             ],
           )
         : const Center(
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [CircularProgressIndicator(), SizedBox(height: 20), Text("Esperando al motor estadístico...")]),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center, 
+              children: [
+                CircularProgressIndicator(), 
+                SizedBox(height: 20), 
+                Text("Iniciando motor estadístico..."),
+                Text("Esto puede tardar unos segundos.", style: TextStyle(color: Colors.grey, fontSize: 12))
+              ]
+            ),
           ),
     );
   }
