@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class DataGrid extends StatefulWidget {
   final Map<String, dynamic>? data;
   
-  // Paginación (Opcional: Si es null, asumimos que es una tabla de resultados pequeña)
+  // Paginación (Opcional)
   final int offset;
   final int totalRows;
   final int filasPorPagina;
@@ -33,39 +33,38 @@ class _DataGridState extends State<DataGrid> {
     super.dispose();
   }
 
-  // --- LÓGICA DE REDONDEO INTELIGENTE ---
   String _formatearCelda(dynamic valor) {
     if (valor == null) return "";
-    
-    // Protección contra errores raros de tipos
     if (valor is! num) return valor.toString();
 
     try {
-      // Si es entero visualmente (ej: 5.0), mostrar "5"
       if (valor == valor.toInt()) return valor.toInt().toString();
-      
-      // Notación científica para valores muy pequeños
       if (valor != 0 && valor.abs() < 0.0001) {
         return valor.toStringAsExponential(2);
       }
-      
-      // Estándar
       return valor.toStringAsFixed(4);
     } catch (e) {
-      return valor.toString(); // Fallback seguro
+      return valor.toString();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // 1. Validación de Mapa Nulo
     if (widget.data == null) {
       return const Center(child: Text("Sin datos para mostrar.", style: TextStyle(color: Colors.grey)));
     }
 
-    List<dynamic> cols = widget.data!['columns'];
-    List<dynamic> rows = widget.data!['data'];
+    // 2. EXTRACCIÓN SEGURA (AQUÍ ESTABA EL ERROR)
+    // Usamos '?? []' para que si es null, se convierta en lista vacía y no rompa
+    List<dynamic> cols = widget.data!['columns'] ?? [];
+    List<dynamic> rows = widget.data!['data'] ?? [];
 
-    // Si hay paginación, calculamos los índices. Si no, mostramos "Total"
+    // 3. Validación de Listas Vacías
+    if (cols.isEmpty) {
+       return const Center(child: Text("La tabla está vacía (0 columnas).", style: TextStyle(color: Colors.grey)));
+    }
+
     bool usarPaginacion = widget.onPageChanged != null;
     int inicio = widget.offset + 1;
     int fin = widget.offset + rows.length;
@@ -89,19 +88,26 @@ class _DataGridState extends State<DataGrid> {
                       constraints: BoxConstraints(minWidth: constraints.maxWidth),
                       child: DataTable(
                         headingRowColor: WidgetStateProperty.all(const Color(0xFFE8F0FE)),
-                        dataRowMinHeight: 30, // Filas más compactas
+                        dataRowMinHeight: 30, 
                         dataRowMaxHeight: 40,
                         border: TableBorder.all(color: Colors.grey.shade300),
+                        
+                        // Generación de Columnas
                         columns: cols.map((c) => DataColumn(
                           label: Text(c.toString().toUpperCase(), 
                               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue.shade900))
                         )).toList(),
-                        rows: rows.map((r) => DataRow(
-                          cells: (r as List).map((c) => DataCell(
-                            // APLICAMOS EL FORMATEO AQUÍ
-                            Text(_formatearCelda(c), style: const TextStyle(fontSize: 13))
-                          )).toList(),
-                        )).toList(),
+                        
+                        // Generación de Filas
+                        rows: rows.map((r) {
+                          // Protección extra: asegurarnos que 'r' sea una lista
+                          List<dynamic> celdas = (r is List) ? r : [];
+                          return DataRow(
+                            cells: celdas.map((c) => DataCell(
+                              Text(_formatearCelda(c), style: const TextStyle(fontSize: 13))
+                            )).toList(),
+                          );
+                        }).toList(),
                       ),
                     ),
                   ),
@@ -111,7 +117,7 @@ class _DataGridState extends State<DataGrid> {
           ),
         ),
 
-        // FOOTER (Solo si hay paginación activada)
+        // FOOTER
         if (usarPaginacion)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),

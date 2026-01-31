@@ -8,7 +8,7 @@ class PdfService {
   static Future<void> generarReporte(String rutaDestino, List<Map<String, dynamic>> resultados) async {
     final pdf = pw.Document();
 
-    // 1. PORTADA (Formato Vertical / Portrait)
+    // 1. PORTADA
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
@@ -17,7 +17,6 @@ class PdfService {
             child: pw.Column(
               mainAxisAlignment: pw.MainAxisAlignment.center,
               children: [
-                // Logo o Icono simulado
                 pw.Container(
                   height: 80, width: 80,
                   decoration: const pw.BoxDecoration(color: PdfColors.blue800, shape: pw.BoxShape.circle),
@@ -38,19 +37,20 @@ class PdfService {
       ),
     );
 
-    // 2. RESULTADOS (Formato Horizontal / Landscape para mayor espacio)
+    // 2. PÁGINAS DE RESULTADOS
     for (var res in resultados) {
       String titulo = res['titulo'];
       String subtitulo = res['subtitulo'] ?? "";
       String tipo = res['tipo'] ?? 'tabla';
+      
+      // Obtenemos los datos (pueden ser Map, String base64 o String HTML)
+      dynamic contenidoDatos = res['datos'];
 
       pdf.addPage(
         pw.MultiPage(
-          // TRUCO MAESTRO: Usamos Landscape para ganar ancho
           pageFormat: PdfPageFormat.a4.landscape, 
-          margin: const pw.EdgeInsets.all(40), // Márgenes limpios
+          margin: const pw.EdgeInsets.all(40),
           
-          // Header de cada página
           header: (pw.Context context) {
             return pw.Container(
               alignment: pw.Alignment.centerRight,
@@ -62,7 +62,7 @@ class PdfService {
 
           build: (pw.Context context) {
             return [
-              // Título del Análisis
+              // Encabezado del Análisis
               pw.Container(
                 decoration: const pw.BoxDecoration(
                   border: pw.Border(left: pw.BorderSide(color: PdfColors.blue800, width: 5))
@@ -80,20 +80,54 @@ class PdfService {
               
               pw.SizedBox(height: 20),
 
-              // Contenido
+              // --- SELECTOR DE CONTENIDO (Aquí estaba el error) ---
               if (tipo == 'imagen') 
-                _construirImagenPdf(res['datos'])
+                _construirImagenPdf(contenidoDatos)
+              else if (tipo == 'html') 
+                _construirPlaceholderWeb() // NUEVA FUNCIÓN PARA HTML
               else 
-                _construirTablaPdf(res['datos']),
+                _construirTablaPdf(contenidoDatos), // Solo pasamos si es tabla
+              // ---------------------------------------------------
             ];
           },
         ),
       );
     }
 
-    // Guardar
     final file = File(rutaDestino);
     await file.writeAsBytes(await pdf.save());
+  }
+
+  // --- WIDGET PARA HTML (PLACEHOLDER) ---
+  static pw.Widget _construirPlaceholderWeb() {
+    return pw.Container(
+      width: double.infinity,
+      height: 300,
+      decoration: pw.BoxDecoration(
+        color: PdfColors.grey100,
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10))
+      ),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          // Icono simulado con texto
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: const pw.BoxDecoration(color: PdfColors.blue100, shape: pw.BoxShape.circle),
+            child: pw.Text("3D", style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColors.blue800)),
+          ),
+          pw.SizedBox(height: 20),
+          pw.Text("Visualización Interactiva Externa", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 10),
+          pw.Text(
+            "Este análisis contiene gráficos interactivos (3D o Web) que no pueden representarse en papel.\nPor favor, consulte la aplicación para interactuar con este modelo.",
+            textAlign: pw.TextAlign.center,
+            style: const pw.TextStyle(color: PdfColors.grey600)
+          ),
+        ]
+      )
+    );
   }
 
   static pw.Widget _construirImagenPdf(String base64String) {
@@ -106,7 +140,7 @@ class PdfService {
           child: pw.Image(
             pw.MemoryImage(imageBytes),
             fit: pw.BoxFit.contain,
-            height: 350, // Limitamos altura para que quepa en landscape
+            height: 350, 
           ),
         ),
       );
@@ -116,18 +150,16 @@ class PdfService {
   }
 
   static pw.Widget _construirTablaPdf(Map<String, dynamic>? dataJson) {
-    if (dataJson == null) return pw.Text("Sin datos");
+    // Validación extra para evitar el crash de tipos
+    if (dataJson == null || dataJson is! Map) return pw.Text("Datos no tabulares disponibles.");
 
     List<dynamic> cols = dataJson['columns'];
     List<dynamic> rows = dataJson['data'];
 
-    // Preprocesar datos para formato
     List<List<dynamic>> datosTabla = rows.map((fila) {
       return (fila as List).map((celda) {
         if (celda is double) {
-          // Si es muy pequeño (p-value), notación científica
           if (celda != 0 && celda.abs() < 0.0001) return celda.toStringAsExponential(2);
-          // Si es entero visualmente
           if (celda == celda.toInt()) return celda.toInt();
           return celda.toStringAsFixed(4);
         }
@@ -135,26 +167,15 @@ class PdfService {
       }).toList();
     }).toList();
 
-    // DEFINICIÓN DE TABLA PROFESIONAL
     return pw.TableHelper.fromTextArray(
       headers: cols.map((c) => c.toString().toUpperCase()).toList(),
       data: datosTabla,
-      
-      // ESTILOS FINOS
       headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-      cellStyle: const pw.TextStyle(fontSize: 8), // Fuente pequeña para que quepan más columnas
-      
-      // COLORES Y BORDES
+      cellStyle: const pw.TextStyle(fontSize: 8),
       headerDecoration: const pw.BoxDecoration(color: PdfColors.blue900),
       rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
-      
-      // ALINEACIÓN INTELIGENTE
-      // Lamentablemente TableHelper usa una alineación global o por mapa.
-      // Usaremos alineación centro-izquierda por defecto para mejor lectura.
       cellAlignment: pw.Alignment.centerLeft,
       headerAlignment: pw.Alignment.centerLeft,
-      
-      // Padding reducido para compactar
       cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
     );
   }

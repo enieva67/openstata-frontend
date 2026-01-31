@@ -5,7 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'widgets/dialogs/ml_training_dialog.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'; 
-
+import 'widgets/dialogs/three_vars_dialog.dart';
 // --- IMPORTS DE TUS SERVICIOS Y WIDGETS ---
 import 'services/pdf_service.dart';
 import 'services/logger_service.dart';
@@ -21,6 +21,7 @@ import 'widgets/dialogs/checkbox_params_dialog.dart';
 import 'widgets/dialogs/multi_variable_dialog.dart';
 import 'widgets/dialogs/hierarchical_dialog.dart';
 import 'widgets/dialogs/graphic_config_dialog.dart'; // Importante para la config de gráficos
+import 'widgets/dialogs/feature_engineering_dialog.dart';
 
 // Función global para decodificar JSON en background (evita congelar UI)
 Map<String, dynamic> _decodificarEnBackground(String mensaje) {
@@ -226,6 +227,16 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
              _historialResultados.add(res);
              _irAResultados();
         }
+        else if (tipo == 'html') {
+             Map<String, dynamic> res = {
+               'titulo': "Interactivo #${_historialResultados.length + 1}",
+               'subtitulo': "Plotly Web Engine",
+               'tipo': 'html', // Marcamos como html
+               'datos': contenido
+             };
+             _historialResultados.add(res);
+             _irAResultados();
+        }
         else if (tipo == 'info_columnas') {
            _abrirDialogoLimpieza(contenido['info']);
         }
@@ -234,6 +245,17 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
                'titulo': "Gráfico #${_historialResultados.length + 1}",
                'subtitulo': "Visualización",
                'tipo': 'imagen',
+               'datos': contenido
+             };
+             _historialResultados.add(res);
+             _irAResultados();
+        }
+        else if (tipo == 'grafico_hibrido') {
+             // contenido trae {imagen: 'base64', html_extra: '<html>'}
+             Map<String, dynamic> res = {
+               'titulo': "Gráfico #${_historialResultados.length + 1}",
+               'subtitulo': "Imagen Estática + Interactivo",
+               'tipo': 'grafico_hibrido', 
                'datos': contenido
              };
              _historialResultados.add(res);
@@ -359,21 +381,30 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     else if (["pca", "kmeans", "elbow"].contains(comando)) {
        _mostrarDialogoParams(nombre, comando);
     }
-    else if (comando == "ml_training") {
+     else if (comando == "ml_training") {
        showDialog(
          context: context,
          builder: (ctx) => MLTrainingDialog(
            columnas: _columnasDisponibles,
-           onEjecutar: (y, xList, algo) {
+           // Callback con 6 argumentos
+           onEjecutar: (y, xList, algo, val, k, explicar) {
              var orden = {
                "comando": "analisis",
                "tipo_analisis": "ml_training",
                "y": y,
                "x": xList,
-               "algoritmo": algo
+               "algoritmo": algo,
+               "validacion": val,
+               "k_folds": k,
+               "explicar": explicar // <-- Enviamos al backend
              };
              _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Entrenando modelo ($algo)...");
+             
+             if (explicar) {
+                _agregarLog("Entrenando y calculando SHAP Values... (Paciencia)");
+             } else {
+                _agregarLog("Entrenando modelo...");
+             }
            }
          )
        );
@@ -397,6 +428,32 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
            }
          )
        );
+    }
+    // PLOTLY 3D
+    else if (comando == "scatter_3d") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ThreeVarsDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (x, y, z, color) {
+             List<String> vars = [x, y, z];
+             if (color != null) vars.add(color);
+             
+             // Enviamos al backend
+             var orden = {
+               "comando": "analisis", 
+               "tipo_analisis": "scatter_3d", 
+               "variables": vars
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Generando 3D...");
+           }
+         )
+       );
+    }
+    // PLOTLY 2D WEB
+    else if (comando == "scatter_web") {
+       _mostrarDialogoVariablesGenerico("Scatter Web", "scatter_web", numVariables: 2);
     }
     // Regresiones y Clasificación
     else if (["ols_multiple", "logit", "roc_analysis"].contains(comando)) {
@@ -430,7 +487,23 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          )
        );
     }
-    
+    else if (comando == "crear_variable") {
+       showDialog(
+         context: context,
+         builder: (ctx) => FeatureEngineeringDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (params) {
+             var orden = {
+               "comando": "transformacion", 
+               "accion": "crear_variable",
+               ...params // Expandimos el mapa de parámetros (spread operator)
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando nueva variable...");
+           }
+         )
+       );
+    }
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
     }

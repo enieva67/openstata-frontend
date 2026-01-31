@@ -49,7 +49,7 @@ class _GraphicConfigDialogState extends State<GraphicConfigDialog> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
-            value: contextPlot,
+            initialValue: contextPlot,
             decoration: const InputDecoration(labelText: "Escala / Tamaño"),
             items: const [
               DropdownMenuItem(value: "paper", child: Text("Paper (Pequeño - Reportes)")),

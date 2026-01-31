@@ -29,8 +29,11 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("Boxplot (Cajas)", "boxplot"),
             _crearOpcion("Configurar Estilos Gráficos", "config_graficos")
           ]),
-
+          _crearAcordeon("Gráficos Interactivos (Plotly)", Icons.touch_app, [
+            _crearOpcion("Scatter 3D (Rotable)", "scatter_3d"),
+            _crearOpcion("Scatter 2D (Web)", "scatter_web"),]),
           _crearAcordeon("Gestión de Datos", Icons.build, [
+            _crearOpcion("Crear / Transformar Variables", "crear_variable"), // NUEVO
             _crearOpcion("Limpieza Inteligente", "limpieza_datos"),
                   ]),
           
@@ -54,6 +57,7 @@ class SidebarMenu extends StatelessWidget {
         _crearOpcion("Método del Codo (Elbow)", "elbow"),
         _crearOpcion("Cluster Jerárquico", "jerarquico"),
       ]),
+          
           _crearAcordeon("Datasets de Prueba", Icons.science, [
             _crearOpcion("California Housing (Difícil)", "ejemplo_california"),
             _crearOpcion("Breast Cancer (Clásico)", "ejemplo_cancer"),
