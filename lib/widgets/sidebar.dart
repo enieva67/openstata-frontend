@@ -65,6 +65,7 @@ class SidebarMenu extends StatelessWidget {
         _crearOpcion("Diagnóstico (ACF / PACF)", "acf_pacf"),
         _crearOpcion("Periodograma (Fourier)", "periodograma"),
         _crearOpcion("Causalidad de Granger", "granger"),
+         _crearOpcion("Facebook Prophet (Auto)", "prophet"),
         _crearOpcion("Test Estacionariedad (ADF)", "adf_test"),
         _crearOpcion("Modelo ARIMA", "arima"),
 

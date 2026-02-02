@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:frontend/widgets/dialogs/prophet_dialog.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'widgets/dialogs/ml_training_dialog.dart';
 import 'widgets/dialogs/doe_dialog.dart';
@@ -410,6 +411,25 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
              } else {
                 _agregarLog("Entrenando modelo...");
              }
+           }
+         )
+       );
+    }
+     else if (comando == "prophet") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ProphetDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (f, v, pasos, freq) {
+             var orden = {
+               "comando": "analisis", 
+               "tipo_analisis": "prophet", 
+               "variables": [f, v],
+               "pasos": pasos,
+               "freq": freq
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Ejecutando Prophet (Esto puede tardar)...");
            }
          )
        );
