@@ -35,6 +35,7 @@ class SidebarMenu extends StatelessWidget {
           _crearAcordeon("Gestión de Datos", Icons.build, [
             _crearOpcion("Crear / Transformar Variables", "crear_variable"), // NUEVO
             _crearOpcion("Limpieza Inteligente", "limpieza_datos"),
+            _crearOpcion("Descomponer Fechas (Time Features)", "extraer_fecha"), // NUEVO
                   ]),
           
           _crearAcordeon("Estadística Descriptiva", Icons.analytics, [
@@ -46,6 +47,8 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("Prueba T (1 muestra)", "ttest_1samp"),
             _crearOpcion("Prueba T (Indep.)", "ttest_ind"),
             _crearOpcion("ANOVA", "anova"),
+            _crearOpcion("Prueba T (Pareada)", "ttest_rel"), // NUEVO
+            _crearOpcion("ANOVA (1 Factor)", "anova"),       // NUEVO
           ]),
           _crearAcordeon("Machine Learning Pro", Icons.psychology, [
             _crearOpcion("Entrenar Modelo (RF/XGB)", "ml_training"),
@@ -57,7 +60,25 @@ class SidebarMenu extends StatelessWidget {
         _crearOpcion("Método del Codo (Elbow)", "elbow"),
         _crearOpcion("Cluster Jerárquico", "jerarquico"),
       ]),
-          
+      _crearAcordeon("Series de Tiempo (Econometría)", Icons.trending_up, [
+        _crearOpcion("Descomposición Estacional", "descomposicion"),
+        _crearOpcion("Diagnóstico (ACF / PACF)", "acf_pacf"),
+        _crearOpcion("Periodograma (Fourier)", "periodograma"),
+        _crearOpcion("Causalidad de Granger", "granger"),
+        _crearOpcion("Test Estacionariedad (ADF)", "adf_test"),
+        _crearOpcion("Modelo ARIMA", "arima"),
+
+      ]),
+          // Crea un NUEVO acordeón:
+          _crearAcordeon("Tablas y Proporciones", Icons.grid_on, [
+            _crearOpcion("Chi-Cuadrado (Independencia)", "chi2"),
+            _crearOpcion("Test Exacto de Fisher", "fisher"),
+          ]),
+          _crearAcordeon("Supuestos y Diagnóstico", Icons.check_circle_outline, [
+            _crearOpcion("Normalidad (Shapiro/QQ)", "normalidad"),
+            _crearOpcion("Homocedasticidad (Levene)", "levene"),
+            _crearOpcion("Post-Hoc Tukey (ANOVA)", "tukey"),
+          ]),
           _crearAcordeon("Datasets de Prueba", Icons.science, [
             _crearOpcion("California Housing (Difícil)", "ejemplo_california"),
             _crearOpcion("Breast Cancer (Clásico)", "ejemplo_cancer"),
@@ -65,8 +86,13 @@ class SidebarMenu extends StatelessWidget {
              _crearAcordeon("No Paramétricas", Icons.graphic_eq, [
             _crearOpcion("Mann-Whitney U", "mannwhitney"),
             _crearOpcion("Kruskal-Wallis", "kruskal"),
-          ]),
 
+            _crearOpcion("Wilcoxon (Pareada)", "wilcoxon"), // NUEVO
+            _crearOpcion("Correlación Spearman", "spearman"), // NUEVO
+          ]),                         
+           _crearAcordeon("Diseño Experimental (DoE)", Icons.science_outlined, [
+            _crearOpcion("ANOVA Factorial (2 Factores)", "anova_2way"),
+          ]),
           _crearAcordeon("Modelos Lineales", Icons.trending_up, [
             _crearOpcion("Análisis ROC & Métricas", "roc_analysis"),
             _crearOpcion("Regresión Lineal Simple", "ols_simple"),

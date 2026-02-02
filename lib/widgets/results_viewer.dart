@@ -18,25 +18,15 @@ class ResultsViewer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (listaResultados.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.assessment_outlined, size: 80, color: Colors.grey),
-            SizedBox(height: 20),
-            Text("No hay análisis realizados aún.", style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-      );
+      return const Center(child: Text("Sin resultados."));
     }
 
-    // DefaultTabController maneja la magia automáticamente
     return DefaultTabController(
       length: listaResultados.length,
-      initialIndex: listaResultados.length - 1, // Ir al último siempre
+      initialIndex: listaResultados.length - 1,
       child: Column(
         children: [
-          // BARRA DE PESTAÑAS
+          // Barra de Pestañas (Igual que antes)
           Container(
             color: Colors.grey[100],
             width: double.infinity,
@@ -46,85 +36,112 @@ class ResultsViewer extends StatelessWidget {
               labelColor: Colors.blue[900],
               indicatorColor: Colors.blue,
               tabs: listaResultados.asMap().entries.map((entry) {
-                return Tab(
-                  text: entry.value['titulo'] ?? "Result ${entry.key + 1}",
-                  icon: const Icon(Icons.analytics, size: 16),
-                );
+                return Tab(text: entry.value['titulo'] ?? "Result ${entry.key + 1}");
               }).toList(),
             ),
           ),
 
-          // CONTENIDO
+          // Contenido
           Expanded(
             child: TabBarView(
               children: listaResultados.map((res) {
-            
-            Widget contenidoPrincipal;
-            String tipo = res['tipo'] ?? 'tabla'; // Usamos la variable 'tipo' siempre
-            
-            // --- ESTRUCTURA IF-ELSE IF CORREGIDA ---
-            
-            if (tipo == 'grafico_hibrido') {
-              var datos = res['datos'];
-              String base64Img = datos['imagen'];
-              String? htmlExtra = datos['html_extra'];
-              var imagenBytes = base64Decode(base64Img);
-              
-              contenidoPrincipal = Stack(
-                alignment: Alignment.bottomRight,
-                children: [
-                  Center(
-                    child: InteractiveViewer(
-                      minScale: 0.5, maxScale: 4.0,
-                      child: Image.memory(imagenBytes, fit: BoxFit.contain),
-                    ),
-                  ),
-                  if (htmlExtra != null)
+                
+                Widget contenidoPrincipal;
+                String tipo = res['tipo'] ?? 'tabla';
+                var datos = res['datos'];
+                
+                // --- EXTRACCIÓN DEL REPORTE ESTADÍSTICO ---
+                String? reporteStat;
+                
+                // Intentamos buscar la clave 'reporte_stat' que mandamos desde Python
+                if (datos is Map && datos.containsKey('reporte_stat')) {
+                  reporteStat = datos['reporte_stat'];
+                }
+                // ------------------------------------------
+
+                if (tipo == 'grafico_hibrido') {
+                  String base64Img = datos['imagen'];
+                  String? htmlExtra = datos['html_extra'];
+                  var imagenBytes = base64Decode(base64Img);
+                  
+                  contenidoPrincipal = Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Center(child: InteractiveViewer(minScale: 0.5, maxScale: 4.0, child: Image.memory(imagenBytes, fit: BoxFit.contain))),
+                      if (htmlExtra != null)
+                        Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: FloatingActionButton.extended(
+                            onPressed: () => WebOpener.abrirHtml(htmlExtra),
+                            icon: const Icon(Icons.open_in_browser),
+                            label: const Text("Interactivo"),
+                            backgroundColor: Colors.deepOrange,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                    ],
+                  );
+                } 
+                else if (tipo == 'imagen') {
+                   // ... (Mismo código de imagen simple) ...
+                   var imagenBytes = base64Decode(datos); // Si viene directo
+                   contenidoPrincipal = Center(child: Image.memory(imagenBytes));
+                }
+                else if (tipo == 'html') {
+                   contenidoPrincipal = HtmlChartViewer(htmlContent: datos);
+                }
+                else {
+                  // Tabla
+                  contenidoPrincipal = DataGrid(data: datos);
+                }
+
+                return Column( // Usamos Column para apilar el reporte y el contenido
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // CABECERA
                     Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: FloatingActionButton.extended(
-                        onPressed: () => WebOpener.abrirHtml(htmlExtra),
-                        icon: const Icon(Icons.open_in_browser),
-                        label: const Text("Explorar Interactivo"),
-                        backgroundColor: Colors.deepOrange,
-                        foregroundColor: Colors.white,
+                      padding: const EdgeInsets.fromLTRB(15, 15, 15, 5),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(res['titulo'] ?? "Resultado", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          const Divider(),
+                        ],
                       ),
                     ),
-                ],
-              );
-            } 
-            else if (tipo == 'imagen') { // Usamos 'else if' para encadenar
-              var imagenBytes = base64Decode(res['datos']);
-              contenidoPrincipal = Center(
-                child: InteractiveViewer(
-                  panEnabled: true, minScale: 0.5, maxScale: 4.0,
-                  child: Image.memory(imagenBytes, fit: BoxFit.contain),
-                ),
-              );
-            }
-            else if (tipo == 'html') {
-               // En realidad ya no usamos HtmlChartViewer incrustado,
-               // sino el botón de abrir externo, pero si decides mantener el visor simple:
-               contenidoPrincipal = HtmlChartViewer(htmlContent: res['datos']);
-            }
-            else {
-              // Si no es ninguno de los anteriores, asumimos Tabla
-              contenidoPrincipal = DataGrid(data: res['datos']);
-            }
-            // ---------------------------------------
 
-            return Padding(
-              padding: const EdgeInsets.all(15.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(res['titulo'] ?? "Resultado", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const Divider(),
-                  Expanded(child: contenidoPrincipal),
-                ],
-              ),
-            );
-          }).toList(),
+                    // --- PANEL DE CONCLUSIONES (NUEVO) ---
+                    if (reporteStat != null && reporteStat.isNotEmpty)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          border: Border.all(color: Colors.blue.shade200),
+                          borderRadius: BorderRadius.circular(8)
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.analytics, color: Colors.blue, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                reporteStat, 
+                                style: const TextStyle(fontSize: 14, color: Colors.black87, height: 1.3, fontFamily: 'Courier New'), // Monoespaciado para alinear números
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    // -------------------------------------
+
+                    // CONTENIDO PRINCIPAL (Tabla o Gráfico)
+                    Expanded(child: contenidoPrincipal),
+                  ],
+                );
+              }).toList(),
             ),
           ),
         ],
@@ -132,3 +149,4 @@ class ResultsViewer extends StatelessWidget {
     );
   }
 }
+

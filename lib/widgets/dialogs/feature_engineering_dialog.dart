@@ -179,7 +179,15 @@ class _FeatureEngineeringDialogState extends State<FeatureEngineeringDialog> {
                           label: Text(col),
                           backgroundColor: Colors.teal.shade50,
                           labelStyle: const TextStyle(color: Colors.teal, fontSize: 11),
-                          onPressed: () => _insertarTexto(col), // Inserta el nombre tal cual
+                          onPressed: () {
+    // Si la variable tiene espacios (ej: "mean radius"), la envolvemos en backticks
+    // para que Pandas la entienda: `mean radius`
+    String textoInsertar = col;
+    if (col.contains(" ")) {
+      textoInsertar = "`$col`";
+    }
+    _insertarTexto(textoInsertar);
+  },
                         );
                       }).toList(),
                     ),

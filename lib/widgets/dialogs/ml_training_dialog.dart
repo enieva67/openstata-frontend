@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 
 class MLTrainingDialog extends StatefulWidget {
   final List<String> columnas;
-  final Function(String y, List<String> x, String algoritmo, String validacion, int k, bool explicar) onEjecutar;
-
+  final Function(String y, List<String> x, String algoritmo, String validacion, int k, bool explicar, String tipoProblema) onEjecutar;
   const MLTrainingDialog({
     super.key,
     required this.columnas,
@@ -18,11 +17,10 @@ class _MLTrainingDialogState extends State<MLTrainingDialog> {
   String? variableY;
   final List<String> variablesX = [];
   String algoritmo = "rf";
-  
   bool explicarShap = false;
-  // Variables de Validación
+  String tipoProblema = "clasificacion"; // 'clasificacion' o 'regresion'
   String metodoValidacion = "simple"; 
-  final TextEditingController _kController = TextEditingController(text: "5");  
+  final TextEditingController _kController = TextEditingController(text: "5");      
 
   @override
   void dispose() {
@@ -41,6 +39,17 @@ class _MLTrainingDialogState extends State<MLTrainingDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text("0. Tipo de Problema:", style: TextStyle(fontWeight: FontWeight.bold)),
+              DropdownButtonFormField<String>(
+                value: tipoProblema,
+                decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10)),
+                items: const [
+                  DropdownMenuItem(value: "clasificacion", child: Text("Clasificación (Binaria 0/1)")),
+                  DropdownMenuItem(value: "regresion", child: Text("Regresión (Numérica Continua)")),
+                ],
+                onChanged: (val) => setState(() => tipoProblema = val!),
+              ),
+              const SizedBox(height: 15),
               // 1. SELECCIÓN DE ALGORITMO
               const Text("1. Algoritmo:", style: TextStyle(fontWeight: FontWeight.bold)),
               DropdownButtonFormField<String>(
@@ -162,7 +171,7 @@ class _MLTrainingDialogState extends State<MLTrainingDialog> {
             ? () {
                 int k = int.tryParse(_kController.text) ?? 5;
                 // Enviamos los 5 argumentos
-                widget.onEjecutar(variableY!, variablesX, algoritmo, metodoValidacion, k, explicarShap);
+                widget.onEjecutar(variableY!, variablesX, algoritmo, metodoValidacion, k, explicarShap, tipoProblema);
                 Navigator.pop(context);
               } 
             : null,

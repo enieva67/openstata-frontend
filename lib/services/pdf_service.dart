@@ -43,8 +43,14 @@ class PdfService {
       String subtitulo = res['subtitulo'] ?? "";
       String tipo = res['tipo'] ?? 'tabla';
       
-      // Obtenemos los datos (pueden ser Map, String base64 o String HTML)
-      dynamic contenidoDatos = res['datos'];
+      var contenidoDatos = res['datos'];
+
+      // --- EXTRACCIÓN SEGURA DEL REPORTE ESTADÍSTICO ---
+      String? reporteStat;
+      if (contenidoDatos is Map && contenidoDatos.containsKey('reporte_stat')) {
+        reporteStat = contenidoDatos['reporte_stat'];
+      }
+      // ------------------------------------------------
 
       pdf.addPage(
         pw.MultiPage(
@@ -62,7 +68,7 @@ class PdfService {
 
           build: (pw.Context context) {
             return [
-              // Encabezado del Análisis
+              // Encabezado
               pw.Container(
                 decoration: const pw.BoxDecoration(
                   border: pw.Border(left: pw.BorderSide(color: PdfColors.blue800, width: 5))
@@ -78,16 +84,33 @@ class PdfService {
                 )
               ),
               
-              pw.SizedBox(height: 20),
+              pw.SizedBox(height: 15),
 
-              // --- SELECTOR DE CONTENIDO (Aquí estaba el error) ---
-              if (tipo == 'imagen') 
-                _construirImagenPdf(contenidoDatos)
+              // --- NUEVO: RECUADRO DE ESTADÍSTICAS EN EL PDF ---
+              if (reporteStat != null && reporteStat.isNotEmpty)
+                pw.Container(
+                  width: double.infinity,
+                  padding: const pw.EdgeInsets.all(10),
+                  decoration: pw.BoxDecoration(
+                    color: PdfColors.blue50,
+                    border: pw.Border.all(color: PdfColors.blue200),
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5))
+                  ),
+                  margin: const pw.EdgeInsets.only(bottom: 15),
+                  child: pw.Text(reporteStat, style: pw.TextStyle(fontSize: 10, font: pw.Font.courier())),
+                ),
+              // --------------------------------------------------
+
+              // Selector de Contenido Visual
+              if (tipo == 'grafico_hibrido') 
+                 // Si es híbrido, 'contenidoDatos' es un Map con 'imagen'
+                 _construirImagenPdf(contenidoDatos['imagen'])
+              else if (tipo == 'imagen') 
+                 _construirImagenPdf(contenidoDatos)
               else if (tipo == 'html') 
-                _construirPlaceholderWeb() // NUEVA FUNCIÓN PARA HTML
+                 _construirPlaceholderWeb()
               else 
-                _construirTablaPdf(contenidoDatos), // Solo pasamos si es tabla
-              // ---------------------------------------------------
+                 _construirTablaPdf(contenidoDatos), // Aquí estaba el error antes
             ];
           },
         ),
@@ -98,7 +121,6 @@ class PdfService {
     await file.writeAsBytes(await pdf.save());
   }
 
-  // --- WIDGET PARA HTML (PLACEHOLDER) ---
   static pw.Widget _construirPlaceholderWeb() {
     return pw.Container(
       width: double.infinity,
@@ -108,56 +130,63 @@ class PdfService {
         border: pw.Border.all(color: PdfColors.grey300),
         borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10))
       ),
-      child: pw.Column(
-        mainAxisAlignment: pw.MainAxisAlignment.center,
-        children: [
-          // Icono simulado con texto
-          pw.Container(
-            padding: const pw.EdgeInsets.all(10),
-            decoration: const pw.BoxDecoration(color: PdfColors.blue100, shape: pw.BoxShape.circle),
-            child: pw.Text("3D", style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColors.blue800)),
-          ),
-          pw.SizedBox(height: 20),
-          pw.Text("Visualización Interactiva Externa", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 10),
-          pw.Text(
-            "Este análisis contiene gráficos interactivos (3D o Web) que no pueden representarse en papel.\nPor favor, consulte la aplicación para interactuar con este modelo.",
-            textAlign: pw.TextAlign.center,
-            style: const pw.TextStyle(color: PdfColors.grey600)
-          ),
-        ]
+      child: pw.Center(
+        child: pw.Column(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [
+            pw.Text("Visualización Interactiva Externa", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+            pw.Text("(Consulte la aplicación)", style: const pw.TextStyle(color: PdfColors.grey600)),
+          ]
+        )
       )
     );
   }
 
-  static pw.Widget _construirImagenPdf(String base64String) {
+  static pw.Widget _construirImagenPdf(dynamic datosImagen) {
     try {
+      // Si recibimos el string directo o dentro de un mapa, lo manejamos
+      String base64String = "";
+      if (datosImagen is String) {
+        base64String = datosImagen;
+      } else if (datosImagen is Map && datosImagen.containsKey('imagen')) {
+        base64String = datosImagen['imagen'];
+      } else {
+        return pw.Text("Formato de imagen no reconocido");
+      }
+
       final imageBytes = base64Decode(base64String.replaceAll('\n', ''));
       return pw.Center(
-        child: pw.Container(
-          padding: const pw.EdgeInsets.all(10),
-          decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.grey200)),
-          child: pw.Image(
-            pw.MemoryImage(imageBytes),
-            fit: pw.BoxFit.contain,
-            height: 350, 
-          ),
+        child: pw.Image(
+          pw.MemoryImage(imageBytes),
+          fit: pw.BoxFit.contain,
+          height: 350, 
         ),
       );
     } catch (e) {
-      return pw.Text("Error imagen");
+      return pw.Text("Error renderizando imagen: $e", style: const pw.TextStyle(color: PdfColors.red));
     }
   }
 
-  static pw.Widget _construirTablaPdf(Map<String, dynamic>? dataJson) {
-    // Validación extra para evitar el crash de tipos
-    if (dataJson == null || dataJson is! Map) return pw.Text("Datos no tabulares disponibles.");
+  // --- AQUÍ ESTABA EL ERROR: AHORA ES DEFENSIVO ---
+  static pw.Widget _construirTablaPdf(dynamic dataJson) {
+    // 1. Verificamos que sea un Mapa
+    if (dataJson == null || dataJson is! Map) {
+      // Si no es mapa (ej: es null), devolvemos texto vacío
+      return pw.Text("Sin datos tabulares.");
+    }
 
-    List<dynamic> cols = dataJson['columns'];
-    List<dynamic> rows = dataJson['data'];
+    // 2. Extraemos con valores por defecto (?? [])
+    // Esto evita el error "Null is not a subtype of List"
+    List<dynamic> cols = dataJson['columns'] ?? [];
+    List<dynamic> rows = dataJson['data'] ?? [];
+
+    if (cols.isEmpty) return pw.Text("Tabla vacía.");
 
     List<List<dynamic>> datosTabla = rows.map((fila) {
-      return (fila as List).map((celda) {
+      // Protección extra por si una fila no es lista
+      if (fila is! List) return <dynamic>[];
+      
+      return fila.map((celda) {
         if (celda is double) {
           if (celda != 0 && celda.abs() < 0.0001) return celda.toStringAsExponential(2);
           if (celda == celda.toInt()) return celda.toInt();

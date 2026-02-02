@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'widgets/dialogs/ml_training_dialog.dart';
+import 'widgets/dialogs/doe_dialog.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'; 
 import 'widgets/dialogs/three_vars_dialog.dart';
+import 'widgets/dialogs/arima_dialog.dart';
+import 'widgets/dialogs/date_features_dialog.dart';
+
 // --- IMPORTS DE TUS SERVICIOS Y WIDGETS ---
 import 'services/pdf_service.dart';
 import 'services/logger_service.dart';
@@ -387,7 +391,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          builder: (ctx) => MLTrainingDialog(
            columnas: _columnasDisponibles,
            // Callback con 6 argumentos
-           onEjecutar: (y, xList, algo, val, k, explicar) {
+           onEjecutar: (y, xList, algo, val, k, explicar, tipoProb) {
              var orden = {
                "comando": "analisis",
                "tipo_analisis": "ml_training",
@@ -396,7 +400,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
                "algoritmo": algo,
                "validacion": val,
                "k_folds": k,
-               "explicar": explicar // <-- Enviamos al backend
+               "explicar": explicar,
+               "tipo_problema": tipoProb // <-- NUEVO
              };
              _enviarAlBackend(jsonEncode(orden));
              
@@ -451,6 +456,65 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          )
        );
     }
+    // DIAGNÓSTICO (ACF/PACF, Periodograma, ADF) -> 2 Variables (Fecha, Valor)
+    else if (["acf_pacf", "periodograma", "adf_test", "descomposicion"].contains(comando)) {
+       _mostrarDialogoVariablesSimple("Configuración (Var 1=Fecha, Var 2=Serie)", comando);
+    }
+    
+    // CAUSALIDAD GRANGER (3 Variables)
+    else if (comando == "granger") {
+       // Usamos ThreeVarsDialog (que ya tienes) o DoeDialog. 
+       // Usaré ThreeVarsDialog porque permite "Color opcional" que ignoraremos.
+       // Lo ideal sería un dialogo específico "GrangerDialog", pero esto funciona:
+       showDialog(
+         context: context,
+         builder: (ctx) => ThreeVarsDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (fecha, causa, efecto, _) { // Ignoramos el 4to
+             var orden = {
+               "comando": "analisis", 
+               "tipo_analisis": "granger", 
+               "variables": [fecha, causa, efecto]
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando Causalidad...");
+           }
+         )
+       );
+       // Nota visual para el usuario: En ThreeVarsDialog:
+       // X = Fecha
+       // Y = Variable Causa
+       // Z = Variable Efecto
+    }
+    // ARIMA
+else if (comando == "arima") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ArimaDialog(
+           columnas: _columnasDisponibles,
+           // Recibimos todos los parametros nuevos
+           onEjecutar: (f, v, p, d, q, P, D, Q, m, pasos) {
+             var orden = {
+               "comando": "analisis", "tipo_analisis": "arima", 
+               "variables": [f, v], 
+               "p": p, "d": d, "q": q,
+               "P": P, "D": D, "Q": Q, "m": m,
+               "pasos": pasos
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Ajustando modelo SARIMA...");
+           }
+         )
+       );
+    }
+// ADF y Descomposición (Necesitan Fecha y Valor -> 2 variables)
+else if (comando == "adf_test" || comando == "descomposicion") {
+   // Usamos el dialogo simple, pero mentalmente el usuario debe saber:
+   // Var 1 = Fecha, Var 2 = Valor
+   // O MEJOR: Creamos un dialogo rapido ad-hoc aqui mismo o reusamos ArimaDialog simplificado
+   // Usemos el simple por ahora con la instruccion clara:
+   _mostrarDialogoVariablesSimple("Configuración (Var 1=Fecha, Var 2=Valor)", comando);
+}
     // PLOTLY 2D WEB
     else if (comando == "scatter_web") {
        _mostrarDialogoVariablesGenerico("Scatter Web", "scatter_web", numVariables: 2);
@@ -487,6 +551,54 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          )
        );
     }
+        // DISEÑO DE EXPERIMENTOS (DoE)
+    else if (comando == "anova_2way") {
+       showDialog(
+         context: context,
+         builder: (ctx) => DoeDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (respuesta, factorA, factorB) {
+             var orden = {
+               "comando": "analisis",
+               "tipo_analisis": "anova_2way",
+               // Enviamos las 3 variables en orden: [Y, F1, F2]
+               "variables": [respuesta, factorA, factorB]
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando ANOVA Factorial e Interacciones...");
+           }
+         )
+       );
+    }
+    // NO PARAMÉTRICOS (Wilcoxon es pareada -> 2 vars)
+    else if (comando == "wilcoxon") {
+       _mostrarDialogoVariablesSimple("Wilcoxon (Pareada)", comando);
+    }
+    // Spearman (Matriz -> Multiples vars -> CheckboxDialog sin input)
+    else if (comando == "spearman") {
+        showDialog(
+        context: context,
+        builder: (ctx) => CheckboxParamsDialog(
+          titulo: "Variables para Spearman",
+          columnas: _columnasDisponibles,
+          showInput: false, 
+          onEjecutar: (varsSel, _) { 
+            var orden = {"comando": "analisis", "tipo_analisis": "spearman", "variables": varsSel};
+            _enviarAlBackend(jsonEncode(orden));
+          },
+        ),
+      );
+    }
+    // CASO 1 VARIABLE (Normalidad)
+    else if (comando == "normalidad") {
+       _mostrarDialogoVariablesGenerico("Test de Normalidad", comando, numVariables: 1);
+    }
+    
+    // CASO 2 VARIABLES (Levene, Tukey)
+    else if (comando == "levene" || comando == "tukey") {
+       // Reutilizamos el dialogo simple, idealmente cambiando los labels si quisieras pulir UX
+       _mostrarDialogoVariablesSimple(nombre, comando);
+    }
     else if (comando == "crear_variable") {
        showDialog(
          context: context,
@@ -503,6 +615,47 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
            }
          )
        );
+    }
+    else if (comando == "extraer_fecha") {
+       showDialog(
+         context: context,
+         builder: (ctx) => DateFeaturesDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (col) {
+             var orden = {
+               "comando": "transformacion", 
+               "accion": "extraer_fecha",
+               "columna": col
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Generando variables temporales...");
+           }
+         )
+       );
+    }
+    // PARAMÉTRICOS Y CATEGÓRICOS (Requieren 2 variables)
+    else if (["anova", "ttest_ind", "ttest_rel", "chi2", "fisher"].contains(comando)) {
+       
+       String label1 = "Variable 1";
+       String label2 = "Variable 2";
+       
+       // Personalizamos etiquetas para mejor UX
+       if (comando == "anova" || comando == "ttest_ind") {
+         label1 = "Variable Numérica";
+         label2 = "Variable de Grupo (Factor)";
+       } else if (comando == "chi2" || comando == "fisher") {
+         label1 = "Variable Fila (Categórica)";
+         label2 = "Variable Columna (Categórica)";
+       } else if (comando == "ttest_rel") {
+         label1 = "Medición Antes (Num)";
+         label2 = "Medición Después (Num)";
+       }
+
+       // Usamos el diálogo genérico pero le cambiamos los labels si tu implementación lo permite,
+       // o usamos el simple. Para rapidez, usemos el simple que ya tenías:
+       _mostrarDialogoVariablesSimple(nombre, comando);
+       // Nota: Si quieres cambiar los labels, tendrás que modificar _mostrarDialogoVariablesSimple
+       // para que acepte label1 y label2 como argumentos. ¡Es una buena mejora!
     }
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
