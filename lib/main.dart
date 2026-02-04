@@ -413,7 +413,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
          builder: (ctx) => MLTrainingDialog(
            columnas: _columnasDisponibles,
            // Callback con 6 argumentos
-           onEjecutar: (y, xList, algo, val, k, explicar, tipoProb) {
+           onEjecutar: (y, xList, algo, val, k, explicar, tipoProb, hp, split) {
              var orden = {
                "comando": "analisis",
                "tipo_analisis": "ml_training",
@@ -423,14 +423,16 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
                "validacion": val,
                "k_folds": k,
                "explicar": explicar,
-               "tipo_problema": tipoProb // <-- NUEVO
+               "tipo_problema": tipoProb,
+               "hyperparams": hp,     // <--- Agregar al JSON
+               "train_split": split   // <--- Agregar al JSON
              };
              _enviarAlBackend(jsonEncode(orden));
              
              if (explicar) {
-                _agregarLog("Entrenando y calculando SHAP Values... (Paciencia)");
+                _agregarLog("Entrenando y calculando SHAP... (Lento)");
              } else {
-                _agregarLog("Entrenando modelo...");
+                _agregarLog("Entrenando modelo ($algo)...");
              }
            }
          )
