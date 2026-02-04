@@ -53,13 +53,17 @@ class _MLTrainingDialogState extends State<MLTrainingDialog> {
               // 1. SELECCIÓN DE ALGORITMO
               const Text("1. Algoritmo:", style: TextStyle(fontWeight: FontWeight.bold)),
               DropdownButtonFormField<String>(
-                value: algoritmo, // Usamos value, no initialValue, para controlar el estado
+                value: algoritmo, 
                 decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10)),
                 items: const [
-                  DropdownMenuItem(value: "rf", child: Text("Random Forest")),
-                  DropdownMenuItem(value: "xgb", child: Text("XGBoost")),
-                  DropdownMenuItem(value: "gb", child: Text("Gradient Boosting")),
-                  DropdownMenuItem(value: "logit", child: Text("Regresión Logística")),
+                  DropdownMenuItem(value: "rf", child: Text("Random Forest (Arboles)")),
+                  DropdownMenuItem(value: "xgb", child: Text("XGBoost (Boosting)")),
+                  DropdownMenuItem(value: "gb", child: Text("Gradient Boosting (Sklearn)")),
+                  DropdownMenuItem(value: "svm", child: Text("Support Vector Machines (SVM)")), // NUEVO
+                  DropdownMenuItem(value: "knn", child: Text("K-Nearest Neighbors (KNN)")),   // NUEVO
+                  DropdownMenuItem(value: "ridge", child: Text("Ridge (Regresión L2)")),       // NUEVO
+                  DropdownMenuItem(value: "lasso", child: Text("Lasso (Regresión L1)")),       // NUEVO
+                  DropdownMenuItem(value: "logit", child: Text("Lineal / Logística (Base)")),
                 ],
                 onChanged: (val) => setState(() => algoritmo = val!),
               ),

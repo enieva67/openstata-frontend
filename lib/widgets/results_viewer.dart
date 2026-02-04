@@ -1,32 +1,79 @@
+import 'dart:io'; // <--- ESTO FALTABA (Para File)
+import 'dart:convert'; // Para base64Decode
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart'; // <--- ESTO FALTABA (Para FilePicker)
+import 'package:frontend/services/web_opener_service.dart';
+
 import 'datagrid.dart';
-import 'dart:convert';
-import 'html_chart_viewer.dart'; 
-import '../services/web_opener_service.dart';
+import 'html_chart_viewer.dart';
+
+
 class ResultsViewer extends StatelessWidget {
   final List<Map<String, dynamic>> listaResultados;
 
-  // CORRECCIÓN: Quitamos 'super.key' de los paréntesis y lo dejamos solo en el super.
-  // Además quitamos 'const' porque ValueKey con una variable no puede ser constante.
+  // Constructor
   ResultsViewer({
-    Key? key, // Aceptamos una key opcional (aunque no la usemos directo)
+    Key? key, 
     required this.listaResultados
-  }) : super(key: ValueKey(listaResultados.length)); 
-  // ↑ Este truco del ValueKey es el que arregla el congelamiento:
-  // Le dice a Flutter: "Si cambia la cantidad de resultados, destruye todo y reconstrúyelo limpio".
+  }) : super(key: ValueKey(listaResultados.length));
+
+  // --- MÉTODO PARA GUARDAR CSV ---
+  Future<void> _guardarResultadoCSV(BuildContext context, Map<String, dynamic> datosJson, String tituloDefault) async {
+    try {
+      // Validación básica por si datosJson no tiene la estructura esperada
+      if (!datosJson.containsKey('columns') || !datosJson.containsKey('data')) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No hay datos tabulares para exportar.")));
+        return;
+      }
+
+      List<dynamic> cols = datosJson['columns'];
+      List<dynamic> rows = datosJson['data'];
+
+      // Construir CSV String
+      StringBuffer csvBuffer = StringBuffer();
+      csvBuffer.writeln(cols.join(',')); // Cabecera
+      for (var row in rows) {
+        // Aseguramos que cada celda sea string y unimos con comas
+        csvBuffer.writeln((row as List).map((e) => e.toString()).join(','));
+      }
+
+      // Guardar
+      String? ruta = await FilePicker.platform.saveFile(
+        dialogTitle: 'Guardar Tabla de Resultados',
+        fileName: '${tituloDefault.replaceAll(" ", "_")}.csv',
+        allowedExtensions: ['csv'],
+        type: FileType.custom,
+      );
+
+      if (ruta != null) {
+        if (!ruta.endsWith('.csv')) ruta += ".csv";
+        final file = File(ruta);
+        await file.writeAsString(csvBuffer.toString());
+        
+        // Verificamos si el contexto sigue montado antes de usarlo
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Tabla guardada en $ruta")));
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error guardando: $e")));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     if (listaResultados.isEmpty) {
-      return const Center(child: Text("Sin resultados."));
+      return const Center(child: Text("Sin resultados aún."));
     }
 
     return DefaultTabController(
       length: listaResultados.length,
-      initialIndex: listaResultados.length - 1,
+      initialIndex: listaResultados.length - 1, 
       child: Column(
         children: [
-          // Barra de Pestañas (Igual que antes)
+          // BARRA DE PESTAÑAS
           Container(
             color: Colors.grey[100],
             width: double.infinity,
@@ -36,30 +83,25 @@ class ResultsViewer extends StatelessWidget {
               labelColor: Colors.blue[900],
               indicatorColor: Colors.blue,
               tabs: listaResultados.asMap().entries.map((entry) {
-                return Tab(text: entry.value['titulo'] ?? "Result ${entry.key + 1}");
+                return Tab(
+                  text: entry.value['titulo'] ?? "Result ${entry.key + 1}",
+                  icon: const Icon(Icons.analytics, size: 16),
+                );
               }).toList(),
             ),
           ),
 
-          // Contenido
+          // CONTENIDO
           Expanded(
             child: TabBarView(
               children: listaResultados.map((res) {
                 
                 Widget contenidoPrincipal;
                 String tipo = res['tipo'] ?? 'tabla';
-                var datos = res['datos'];
                 
-                // --- EXTRACCIÓN DEL REPORTE ESTADÍSTICO ---
-                String? reporteStat;
-                
-                // Intentamos buscar la clave 'reporte_stat' que mandamos desde Python
-                if (datos is Map && datos.containsKey('reporte_stat')) {
-                  reporteStat = datos['reporte_stat'];
-                }
-                // ------------------------------------------
-
+                // Lógica de visualización unificada
                 if (tipo == 'grafico_hibrido') {
+                  var datos = res['datos'];
                   String base64Img = datos['imagen'];
                   String? htmlExtra = datos['html_extra'];
                   var imagenBytes = base64Decode(base64Img);
@@ -67,7 +109,12 @@ class ResultsViewer extends StatelessWidget {
                   contenidoPrincipal = Stack(
                     alignment: Alignment.bottomRight,
                     children: [
-                      Center(child: InteractiveViewer(minScale: 0.5, maxScale: 4.0, child: Image.memory(imagenBytes, fit: BoxFit.contain))),
+                      Center(
+                        child: InteractiveViewer(
+                          minScale: 0.5, maxScale: 4.0,
+                          child: Image.memory(imagenBytes, fit: BoxFit.contain),
+                        ),
+                      ),
                       if (htmlExtra != null)
                         Padding(
                           padding: const EdgeInsets.all(16.0),
@@ -83,63 +130,71 @@ class ResultsViewer extends StatelessWidget {
                   );
                 } 
                 else if (tipo == 'imagen') {
-                   // ... (Mismo código de imagen simple) ...
-                   var imagenBytes = base64Decode(datos); // Si viene directo
-                   contenidoPrincipal = Center(child: Image.memory(imagenBytes));
+                  var imagenBytes = base64Decode(res['datos']);
+                  contenidoPrincipal = Center(
+                    child: InteractiveViewer(
+                      panEnabled: true, minScale: 0.5, maxScale: 4.0,
+                      child: Image.memory(imagenBytes, fit: BoxFit.contain),
+                    ),
+                  );
                 }
                 else if (tipo == 'html') {
-                   contenidoPrincipal = HtmlChartViewer(htmlContent: datos);
+                   // Usamos el visor con botón externo
+                   contenidoPrincipal = HtmlChartViewer(htmlContent: res['datos']);
                 }
                 else {
-                  // Tabla
-                  contenidoPrincipal = DataGrid(data: datos);
+                  // Por defecto es tabla
+                  contenidoPrincipal = DataGrid(data: res['datos']);
                 }
 
-                return Column( // Usamos Column para apilar el reporte y el contenido
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // CABECERA
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 15, 15, 5),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                // Extracción del reporte estadístico (texto)
+                String? reporteStat;
+                if (res['datos'] is Map && res['datos'].containsKey('reporte_stat')) {
+                  reporteStat = res['datos']['reporte_stat'];
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.all(15.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // CABECERA CON BOTÓN DE DESCARGA
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(res['titulo'] ?? "Resultado", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                          const Divider(),
+                          
+                          // BOTÓN VERDE DE DESCARGA (Solo si hay datos tabulares)
+                          // Funciona para tablas puras y gráficos híbridos que traen datos
+                          if (tipo == 'tabla' || tipo == 'grafico_hibrido')
+                            IconButton(
+                              icon: const Icon(Icons.download, color: Colors.green),
+                              tooltip: "Descargar Tabla a CSV",
+                              onPressed: () => _guardarResultadoCSV(context, res['datos'], res['titulo'] ?? "resultado"),
+                            )
                         ],
                       ),
-                    ),
+                      
+                      const Divider(),
 
-                    // --- PANEL DE CONCLUSIONES (NUEVO) ---
-                    if (reporteStat != null && reporteStat.isNotEmpty)
-                      Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          border: Border.all(color: Colors.blue.shade200),
-                          borderRadius: BorderRadius.circular(8)
+                      // PANEL DE CONCLUSIONES
+                      if (reporteStat != null && reporteStat.isNotEmpty)
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            border: Border.all(color: Colors.blue.shade200),
+                            borderRadius: BorderRadius.circular(5)
+                          ),
+                          child: Text(reporteStat, style: const TextStyle(fontFamily: 'Courier New', fontSize: 13)),
                         ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.analytics, color: Colors.blue, size: 20),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                reporteStat, 
-                                style: const TextStyle(fontSize: 14, color: Colors.black87, height: 1.3, fontFamily: 'Courier New'), // Monoespaciado para alinear números
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    // -------------------------------------
 
-                    // CONTENIDO PRINCIPAL (Tabla o Gráfico)
-                    Expanded(child: contenidoPrincipal),
-                  ],
+                      // CONTENIDO (Tabla o Gráfico)
+                      Expanded(child: contenidoPrincipal),
+                    ],
+                  ),
                 );
               }).toList(),
             ),
@@ -149,4 +204,3 @@ class ResultsViewer extends StatelessWidget {
     );
   }
 }
-

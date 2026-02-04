@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'widgets/dialogs/three_vars_dialog.dart';
 import 'widgets/dialogs/arima_dialog.dart';
 import 'widgets/dialogs/date_features_dialog.dart';
+import 'widgets/dialogs/reco_dialog.dart'; 
 
 // --- IMPORTS DE TUS SERVICIOS Y WIDGETS ---
 import 'services/pdf_service.dart';
@@ -303,8 +304,11 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
 
   Future<void> _cargarArchivo() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom, allowedExtensions: ['csv'],
+      type: FileType.custom, 
+      // AGREGAMOS LAS EXTENSIONES AQUÍ
+      allowedExtensions: ['csv', 'xlsx', 'xls', 'sav', 'dta', 'parquet'],
     );
+    
     if (result != null) {
       setState(() => _cargando = true);
       String ruta = result.files.single.path!.replaceAll(r'\', r'/'); 
@@ -382,6 +386,23 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     else if (comando == "scatter" || comando == "boxplot") {
       _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
     }
+    else if (comando == "svd" || comando == "apriori") {
+   showDialog(
+     context: context,
+     builder: (ctx) => RecoDialog(
+       columnas: _columnasDisponibles,
+       tipo: comando,
+       onEjecutar: (vars, param) {
+         var orden = {
+           "comando": "analisis", "tipo_analisis": comando, 
+           "variables": vars, "parametro_float": param
+         };
+         _enviarAlBackend(jsonEncode(orden));
+         _agregarLog("Ejecutando algoritmo de recomendación...");
+       }
+     )
+   );
+}
     // Multivariado con parámetros
     else if (["pca", "kmeans", "elbow"].contains(comando)) {
        _mostrarDialogoParams(nombre, comando);

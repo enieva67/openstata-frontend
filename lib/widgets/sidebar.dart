@@ -53,7 +53,10 @@ class SidebarMenu extends StatelessWidget {
           _crearAcordeon("Machine Learning Pro", Icons.psychology, [
             _crearOpcion("Entrenar Modelo (RF/XGB)", "ml_training"),
           ]),
-          _crearAcordeon("Multivariado / ML", Icons.hub, [
+          _crearAcordeon("Sistemas de Recomendación", Icons.shopping_bag, [
+        _crearOpcion("Colaborativo (SVD)", "svd"),
+        _crearOpcion("Market Basket (Apriori)", "apriori"),]),
+        _crearAcordeon("Multivariado / ML", Icons.hub, [
         _crearOpcion("PCA (Biplot)", "pca"),
         _crearOpcion("K-Means Clustering", "kmeans"),
          _crearOpcion("PCA (Componentes Princ.)", "pca"),
