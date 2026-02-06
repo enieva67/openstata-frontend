@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:frontend/widgets/dialogs/prophet_dialog.dart';
+import 'widgets/ai_chat_panel.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'widgets/dialogs/ml_training_dialog.dart';
 import 'widgets/dialogs/doe_dialog.dart';
 import 'package:file_picker/file_picker.dart';
@@ -100,6 +102,9 @@ class PantallaPrincipal extends StatefulWidget {
 
 class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTickerProviderStateMixin {
   
+  final List<Map<String, String>> _chatHistory = [];
+  bool _iaPensando = false;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>(); // Para abrir el drawer
   // --- CONEXIÓN ---
   WebSocketChannel? _canal;
   bool _conectado = false;
@@ -195,7 +200,44 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
       );
     }
   }
+Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<String, dynamic>? datosEspecificos}) async {
+    // 1. Intentamos obtener la API Key
+    String? key = apiKeyOverride;
 
+    // Si no nos la pasaron (ej: clic en botón interpretar), la buscamos en disco
+    if (key == null || key.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      key = prefs.getString('gemini_api_key');
+    }
+    
+    // 2. Validación: Si aun así no tenemos key, pedimos al usuario
+    if (key == null || key.isEmpty) {
+       _scaffoldKey.currentState?.openEndDrawer(); // Abrimos el panel lateral
+       if(mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           const SnackBar(content: Text("Por favor, configura tu API Key primero."))
+         );
+       }
+       return;
+    }
+
+    // 3. Actualizamos UI (Chat)
+    setState(() {
+      _chatHistory.add({"role": "user", "content": pregunta}); 
+      _iaPensando = true;
+    });
+    
+    // 4. Preparamos el envío al Backend
+    var orden = {
+      "comando": "consulta_ia",
+      "api_key": key,
+      "mensaje": pregunta,
+      // Si venimos del botón interpretar, aquí van los datos de esa tabla/gráfico
+      "analisis_puntual": datosEspecificos 
+    };
+    
+    _enviarAlBackend(jsonEncode(orden));
+  }
   // --- PROCESAMIENTO DE MENSAJES ---
   Future<void> _procesarMensaje(String mensajeRaw) async {
     try {
@@ -215,6 +257,18 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
         else if (tipo == 'error') {
           _agregarLog(contenido, esError: true);
         } 
+        else if (tipo == 'respuesta_ia') {
+       setState(() {
+         _iaPensando = false;
+         _chatHistory.add({"role": "ai", "content": contenido});
+       });
+    }
+    else if (tipo == 'error_ia') {
+       setState(() {
+         _iaPensando = false;
+         _chatHistory.add({"role": "ai", "content": "⚠️ Error: $contenido"});
+       });
+    }
         else if (tipo == 'tabla_datos') {
           _datasetRaw = contenido;
           _columnasDisponibles = List<String>.from(contenido['columns']);
@@ -700,6 +754,32 @@ else if (comando == "adf_test" || comando == "descomposicion") {
        // Nota: Si quieres cambiar los labels, tendrás que modificar _mostrarDialogoVariablesSimple
        // para que acepte label1 y label2 como argumentos. ¡Es una buena mejora!
     }
+    else if (comando == "kaplan_meier") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ThreeVarsDialog(
+           columnas: _columnasDisponibles,
+           // Mapeo mental para el usuario:
+           // X -> Variable de TIEMPO (Duración)
+           // Y -> Variable de EVENTO (0/1, Muerte/Fallo)
+           // Z -> Variable de GRUPO (Tratamiento/Control)
+           // color -> Ignorado
+           onEjecutar: (tiempo, evento, grupo, _) { 
+             
+             // Preparamos la lista en el orden que espera el backend: [Tiempo, Evento, Grupo]
+             var varsToSend = [tiempo, evento, grupo];
+             
+             var orden = {
+               "comando": "analisis",
+               "tipo_analisis": "kaplan_meier",
+               "variables": varsToSend
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando curvas de supervivencia (K-M)...");
+           }
+         )
+       );
+    }
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
     }
@@ -840,6 +920,13 @@ else if (comando == "adf_test" || comando == "descomposicion") {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey, // Asignar la key
+  endDrawer: AIChatPanel(
+        historial: _chatHistory,
+        cargando: _iaPensando,
+        // Adaptamos la llamada: pasamos la key como 'apiKeyOverride'
+        onEnviarConsulta: (msg, key) => _enviarConsultaIA(msg, apiKeyOverride: key),
+      ),
       appBar: AppBar(
         title: Row(
           children: [
@@ -853,6 +940,11 @@ else if (comando == "adf_test" || comando == "descomposicion") {
           ],
         ),
         actions: [
+          IconButton(
+        icon: const Icon(Icons.auto_awesome, color: Colors.purpleAccent),
+        tooltip: "Asistente IA",
+        onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+      ),
           IconButton(icon: const Icon(Icons.save_alt, color: Colors.green), onPressed: _exportarDataset, tooltip: "Guardar CSV"),
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.redAccent), onPressed: _exportarReportePDF, tooltip: "Guardar PDF"),
           const SizedBox(width: 10),
@@ -877,7 +969,19 @@ else if (comando == "adf_test" || comando == "descomposicion") {
                         children: [
                           ConsoleWidget(logs: _logs, onEnviarComando: _enviarComandoManual),
                           DataGrid(data: _datasetRaw, offset: _offsetActual, totalRows: _totalFilas, filasPorPagina: _filasPorPagina, onPageChanged: _solicitarPagina),
-                          ResultsViewer(listaResultados: _historialResultados),
+                          ResultsViewer(
+                            listaResultados: _historialResultados,
+                            
+                            // AQUÍ CONECTAMOS LA LÓGICA
+                            onInterpretar: (prompt, datosJson) {
+                              // 1. Abrimos el panel lateral (Drawer)
+                              _scaffoldKey.currentState?.openEndDrawer();
+                              
+                              // 2. Enviamos la consulta a la IA pasándole los datos específicos
+                              // No pasamos apiKey aquí, la función _enviarConsultaIA la buscará sola
+                              _enviarConsultaIA(prompt, datosEspecificos: datosJson);
+                            },
+                          ),
                         ],
                       ),
                     ),

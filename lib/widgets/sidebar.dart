@@ -104,6 +104,9 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("Regresión Logística", "logit"),
             _crearOpcion("GLM", "glm"),
           ]),
+          _crearAcordeon("Análisis de Supervivencia", Icons.medical_services, [
+            _crearOpcion("Curvas Kaplan-Meier", "kaplan_meier"),
+          ]),
         ],
       ),
     );

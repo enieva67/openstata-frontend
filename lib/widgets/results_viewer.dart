@@ -9,12 +9,14 @@ import 'html_chart_viewer.dart';
 
 
 class ResultsViewer extends StatelessWidget {
+  final Function(String prompt, Map<String, dynamic> datos)? onInterpretar; // Nuevo callback
   final List<Map<String, dynamic>> listaResultados;
 
   // Constructor
   ResultsViewer({
     Key? key, 
-    required this.listaResultados
+    required this.listaResultados,
+    this.onInterpretar, // Recibimos la función
   }) : super(key: ValueKey(listaResultados.length));
 
   // --- MÉTODO PARA GUARDAR CSV ---
@@ -163,7 +165,18 @@ class ResultsViewer extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(res['titulo'] ?? "Resultado", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                          
+                          // BOTÓN IA
+                               IconButton(
+                                icon: const Icon(Icons.auto_awesome, color: Colors.purple),
+                                tooltip: "Interpretar con IA",
+                                onPressed: () {
+                                  if (onInterpretar != null) {
+                                    // Enviamos los datos crudos de este resultado específico
+                                    onInterpretar!("Explícame detalladamente estos resultados estadísticos. Interpreta los valores significativos, coeficientes y métricas.", res['datos']);
+                                  }
+                                },
+                              ),
+                              const SizedBox(width: 8),
                           // BOTÓN VERDE DE DESCARGA (Solo si hay datos tabulares)
                           // Funciona para tablas puras y gráficos híbridos que traen datos
                           if (tipo == 'tabla' || tipo == 'grafico_hibrido')
