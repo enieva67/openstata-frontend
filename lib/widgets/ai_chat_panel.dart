@@ -76,7 +76,7 @@ class _AIChatPanelState extends State<AIChatPanel> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 400, // Ancho del panel lateral
+     
       color: Colors.white,
       child: Column(
         children: [

@@ -102,19 +102,21 @@ class PantallaPrincipal extends StatefulWidget {
 
 class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTickerProviderStateMixin {
   
-  final List<Map<String, String>> _chatHistory = [];
-  bool _iaPensando = false;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>(); // Para abrir el drawer
   // --- CONEXIÓN ---
   WebSocketChannel? _canal;
   bool _conectado = false;
   Timer? _timerReconexion;
 
-  // --- ESTADO DE DATOS ---
+  // --- ESTADO ---
   final List<String> _logs = []; 
   Map<String, dynamic>? _datasetRaw;
   List<String> _columnasDisponibles = [];
   final List<Map<String, dynamic>> _historialResultados = [];
+  
+  // --- ESTADO IA ---
+  final List<Map<String, String>> _chatHistory = [];
+  bool _iaPensando = false;
+  bool _mostrarPanelIA = false; // <--- NUEVA VARIABLE DE CONTROL VISUAL
 
   // Paginación
   final int _filasPorPagina = 100;
@@ -201,43 +203,37 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
     }
   }
 Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<String, dynamic>? datosEspecificos}) async {
-    // 1. Intentamos obtener la API Key
+    // 1. Validar Key (Igual que antes)
     String? key = apiKeyOverride;
-
-    // Si no nos la pasaron (ej: clic en botón interpretar), la buscamos en disco
     if (key == null || key.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
       key = prefs.getString('gemini_api_key');
     }
     
-    // 2. Validación: Si aun así no tenemos key, pedimos al usuario
+    // Si no hay key, forzamos abrir el panel para que el usuario la ponga
     if (key == null || key.isEmpty) {
-       _scaffoldKey.currentState?.openEndDrawer(); // Abrimos el panel lateral
-       if(mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(
-           const SnackBar(content: Text("Por favor, configura tu API Key primero."))
-         );
-       }
+       setState(() => _mostrarPanelIA = true); // <--- ABRIMOS EL PANEL
+       if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Configura tu API Key en el panel lateral.")));
        return;
     }
 
-    // 3. Actualizamos UI (Chat)
+    // 2. Abrir panel y mostrar pregunta
     setState(() {
+      _mostrarPanelIA = true; // <--- FORZAMOS MOSTRAR EL PANEL
       _chatHistory.add({"role": "user", "content": pregunta}); 
       _iaPensando = true;
     });
     
-    // 4. Preparamos el envío al Backend
+    // 3. Enviar (Igual que antes)
     var orden = {
       "comando": "consulta_ia",
       "api_key": key,
       "mensaje": pregunta,
-      // Si venimos del botón interpretar, aquí van los datos de esa tabla/gráfico
       "analisis_puntual": datosEspecificos 
     };
-    
     _enviarAlBackend(jsonEncode(orden));
   }
+
   // --- PROCESAMIENTO DE MENSAJES ---
   Future<void> _procesarMensaje(String mensajeRaw) async {
     try {
@@ -458,7 +454,7 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
    );
 }
     // Multivariado con parámetros
-    else if (["pca", "kmeans", "elbow"].contains(comando)) {
+    else if (["pca", "kmeans", "elbow", "tsne"].contains(comando)) {
        _mostrarDialogoParams(nombre, comando);
     }
      else if (comando == "ml_training") {
@@ -810,6 +806,10 @@ else if (comando == "adf_test" || comando == "descomposicion") {
      if (comando == "kmeans") { labelParam = "Clusters (k)"; valDefecto = 3; }
      if (comando == "elbow") { labelParam = "Max K"; valDefecto = 10; }
 
+    if (comando == "tsne") { 
+         labelParam = "Perplejidad (5-50)"; 
+         valDefecto = 30; }
+         
      showDialog(
       context: context,
       builder: (ctx) => CheckboxParamsDialog(
@@ -920,43 +920,49 @@ else if (comando == "adf_test" || comando == "descomposicion") {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      key: _scaffoldKey, // Asignar la key
-  endDrawer: AIChatPanel(
-        historial: _chatHistory,
-        cargando: _iaPensando,
-        // Adaptamos la llamada: pasamos la key como 'apiKeyOverride'
-        onEnviarConsulta: (msg, key) => _enviarConsultaIA(msg, apiKeyOverride: key),
-      ),
       appBar: AppBar(
         title: Row(
           children: [
             const Text("OpenStata Evolution"),
             const SizedBox(width: 10),
-            // Indicador de estado
             Tooltip(
-              message: _conectado ? "Conectado" : "Buscando servidor...",
+              message: _conectado ? "Conectado" : "Buscando...",
               child: Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _conectado ? Colors.green : Colors.redAccent))
             )
           ],
         ),
+        backgroundColor: Colors.white,
+        elevation: 1,
         actions: [
-          IconButton(
-        icon: const Icon(Icons.auto_awesome, color: Colors.purpleAccent),
-        tooltip: "Asistente IA",
-        onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-      ),
+          // BOTONES DE ACCIÓN
           IconButton(icon: const Icon(Icons.save_alt, color: Colors.green), onPressed: _exportarDataset, tooltip: "Guardar CSV"),
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.redAccent), onPressed: _exportarReportePDF, tooltip: "Guardar PDF"),
+          const SizedBox(width: 10),
+          
+          // BOTÓN DE IA (TOGGLE)
+          // Ahora este botón muestra u oculta el panel lateral sin bloquear
+          IconButton(
+            icon: Icon(Icons.auto_awesome, color: _mostrarPanelIA ? Colors.purple : Colors.grey),
+            tooltip: "Asistente IA (Mostrar/Ocultar)",
+            onPressed: () => setState(() => _mostrarPanelIA = !_mostrarPanelIA),
+          ),
+          
           const SizedBox(width: 10),
           IconButton(icon: const Icon(Icons.folder_open, color: Colors.blueAccent), onPressed: _cargarArchivo, tooltip: "Abrir CSV"),
           const SizedBox(width: 15),
         ],
       ),
+      
+      // EL BODY AHORA TIENE 3 COLUMNAS SI EL CHAT ESTÁ ACTIVO
       body: _conectado 
         ? Row(
             children: [
+              // COLUMNA 1: MENÚ LATERAL (Izquierda)
               SidebarMenu(onOpcionSeleccionada: _manejarClickMenu),
+
+              // COLUMNA 2: ÁREA DE TRABAJO (Centro - Se expande)
               Expanded(
+                flex: 7, // Ocupa el 70% del espacio disponible (o más si no hay chat)
                 child: Column(
                   children: [
                     Container(
@@ -971,14 +977,9 @@ else if (comando == "adf_test" || comando == "descomposicion") {
                           DataGrid(data: _datasetRaw, offset: _offsetActual, totalRows: _totalFilas, filasPorPagina: _filasPorPagina, onPageChanged: _solicitarPagina),
                           ResultsViewer(
                             listaResultados: _historialResultados,
-                            
-                            // AQUÍ CONECTAMOS LA LÓGICA
+                            // Callback del botón "Interpretar"
                             onInterpretar: (prompt, datosJson) {
-                              // 1. Abrimos el panel lateral (Drawer)
-                              _scaffoldKey.currentState?.openEndDrawer();
-                              
-                              // 2. Enviamos la consulta a la IA pasándole los datos específicos
-                              // No pasamos apiKey aquí, la función _enviarConsultaIA la buscará sola
+                              // Ya no necesitamos abrir drawer manual, la función lo hace
                               _enviarConsultaIA(prompt, datosEspecificos: datosJson);
                             },
                           ),
@@ -988,18 +989,29 @@ else if (comando == "adf_test" || comando == "descomposicion") {
                   ],
                 ),
               ),
+
+              // COLUMNA 3: PANEL IA (Derecha - Condicional)
+              if (_mostrarPanelIA) 
+                Expanded(
+                  flex: 3, // Ocupa el 30% del espacio (aprox 400px en monitores grandes)
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border(left: BorderSide(color: Colors.grey.shade300, width: 1)),
+                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 5, offset: const Offset(-2, 0))]
+                    ),
+                    child: AIChatPanel(
+                      historial: _chatHistory,
+                      cargando: _iaPensando,
+                      // Pasamos la key como parámetro opcional si la tuviéramos
+                      onEnviarConsulta: (msg, key) => _enviarConsultaIA(msg, apiKeyOverride: key),
+                    ),
+                  ),
+                ),
+
             ],
           )
         : const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center, 
-              children: [
-                CircularProgressIndicator(), 
-                SizedBox(height: 20), 
-                Text("Iniciando motor estadístico..."),
-                Text("Esto puede tardar unos segundos.", style: TextStyle(color: Colors.grey, fontSize: 12))
-              ]
-            ),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [CircularProgressIndicator(), SizedBox(height: 20), Text("Iniciando motor estadístico...")]),
           ),
     );
   }
