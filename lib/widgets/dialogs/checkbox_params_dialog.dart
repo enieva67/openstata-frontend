@@ -5,8 +5,10 @@ class CheckboxParamsDialog extends StatefulWidget {
   final List<String> columnas;
   final String labelParametro; 
   final int valorDefecto;
-  final bool showInput; // <--- NUEVO: ¿Mostramos el input numérico?
-  final Function(List<String> vars, int param) onEjecutar;
+  final bool showInput; 
+  
+  // 1. MODIFICACIÓN: Agregamos 'bool guardar' a la función callback
+  final Function(List<String> vars, int param, bool guardar) onEjecutar;
 
   const CheckboxParamsDialog({
     super.key,
@@ -14,7 +16,7 @@ class CheckboxParamsDialog extends StatefulWidget {
     required this.columnas,
     this.labelParametro = "Parámetro",
     this.valorDefecto = 0,
-    this.showInput = true, // Por defecto SÍ (para PCA, Kmeans)
+    this.showInput = true, 
     required this.onEjecutar,
   });
 
@@ -25,6 +27,9 @@ class CheckboxParamsDialog extends StatefulWidget {
 class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
   final List<String> seleccionadas = [];
   late TextEditingController _paramController;
+  
+  // 2. MODIFICACIÓN: Variable de estado para el checkbox
+  bool guardarResultado = false;
 
   @override
   void initState() {
@@ -44,11 +49,11 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
       ),
       content: SizedBox(
         width: 350,
-        height: 500,
+        height: 550, // Aumentamos un poco la altura para que quepa el checkbox
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. CONFIGURACIÓN DEL PARÁMETRO (SOLO SI showInput es TRUE)
+            // 1. CONFIGURACIÓN DEL PARÁMETRO
             if (widget.showInput) ...[
               Container(
                 padding: const EdgeInsets.all(10),
@@ -94,10 +99,33 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
                 ),
               ),
             ),
+            
             Padding(
-              padding: const EdgeInsets.only(top: 5),
+              padding: const EdgeInsets.only(top: 5, bottom: 10),
               child: Text("${seleccionadas.length} seleccionadas", style: const TextStyle(fontSize: 12, color: Colors.grey)),
             ),
+
+            // 3. MODIFICACIÓN: EL NUEVO CHECKBOX
+            // Solo lo mostramos si es un análisis que genera datos nuevos (PCA/KMeans)
+            // Asumimos que si hay input numérico (showInput=true), es PCA/Kmeans. 
+            // Si es Heatmap (showInput=false), no tiene sentido guardar dataset.
+            if (widget.showInput) 
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: Colors.green.withOpacity(0.3))
+                ),
+                child: CheckboxListTile(
+                  title: const Text("Guardar como Dataset", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.green)),
+                  subtitle: const Text("Crea una nueva tabla en memoria con los resultados.", style: TextStyle(fontSize: 11)),
+                  value: guardarResultado,
+                  onChanged: (v) => setState(() => guardarResultado = v!),
+                  dense: true,
+                  activeColor: Colors.green,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+              ),
           ],
         ),
       ),
@@ -105,21 +133,19 @@ class _CheckboxParamsDialogState extends State<CheckboxParamsDialog> {
         TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
         
         ElevatedButton(
-          // Habilitar botón si hay al menos 2 variables
           onPressed: seleccionadas.length >= 2 ? () {
             int param = 0;
             
-            // Si hay input, validamos lo que escribió el usuario
             if (widget.showInput) {
                int? p = int.tryParse(_paramController.text);
-               if (p == null || p <= 0) return; // Si escribió basura, no hace nada
+               if (p == null || p <= 0) return; 
                param = p;
             } else {
-               // Si NO hay input (Heatmap), usamos el valor por defecto invisiblemente
                param = widget.valorDefecto;
             }
 
-            widget.onEjecutar(seleccionadas, param);
+            // 4. MODIFICACIÓN: Pasamos el booleano 'guardarResultado' al callback
+            widget.onEjecutar(seleccionadas, param, guardarResultado);
             Navigator.pop(context);
           } : null,
           child: const Text("Ejecutar"),

@@ -12,7 +12,11 @@ import 'package:flutter/foundation.dart';
 import 'widgets/dialogs/three_vars_dialog.dart';
 import 'widgets/dialogs/arima_dialog.dart';
 import 'widgets/dialogs/date_features_dialog.dart';
+import 'widgets/dialogs/merge_dialog.dart';
 import 'widgets/dialogs/reco_dialog.dart'; 
+import 'widgets/dialogs/sql_table_dialog.dart';
+import 'widgets/dialogs/concat_dialog.dart';
+import 'widgets/dialogs/filter_dialog.dart';
 
 // --- IMPORTS DE TUS SERVICIOS Y WIDGETS ---
 import 'services/pdf_service.dart';
@@ -112,6 +116,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
   Map<String, dynamic>? _datasetRaw;
   List<String> _columnasDisponibles = [];
   final List<Map<String, dynamic>> _historialResultados = [];
+  List<String> _listaDatasets = [];
+  String? _datasetActivo;
   
   // --- ESTADO IA ---
   final List<Map<String, String>> _chatHistory = [];
@@ -177,7 +183,18 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> with SingleTicker
       _reintentarLuego();
     }
   }
-
+void _cambiarDatasetActivo(String nombreId) {
+  // Optimismo UI
+  setState(() => _datasetActivo = nombreId);
+  
+  var orden = {
+    "comando": "gestion_datasets",
+    "accion": "cambiar",
+    "nombre": nombreId
+  };
+  _enviarAlBackend(jsonEncode(orden));
+  _agregarLog("Cambiando a $nombreId...");
+}
   void _reintentarLuego() {
     if (_timerReconexion != null && _timerReconexion!.isActive) return;
     
@@ -217,20 +234,34 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
        return;
     }
 
-    // 2. Abrir panel y mostrar pregunta
     setState(() {
-      _mostrarPanelIA = true; // <--- FORZAMOS MOSTRAR EL PANEL
-      _chatHistory.add({"role": "user", "content": pregunta}); 
+      _chatHistory.add({"role": "user", "content": pregunta});
       _iaPensando = true;
     });
     
-    // 3. Enviar (Igual que antes)
+    // --- OPTIMIZACIÓN: LIMPIEZA EN EL FRONTEND ---
+    // Creamos una copia de los datos para no modificar lo que se ve en pantalla,
+    // y le quitamos las imágenes y HTML pesados antes de enviar.
+    Map<String, dynamic>? datosLigeros;
+    
+    if (datosEspecificos != null) {
+      // 'Map.from' crea una copia nueva
+      datosLigeros = Map<String, dynamic>.from(datosEspecificos);
+      
+      // Borramos lo que la IA no necesita y pesa mucho
+      datosLigeros.remove('imagen');
+      datosLigeros.remove('html_extra');
+      datosLigeros.remove('df_nuevo'); 
+    }
+    // ---------------------------------------------
+
     var orden = {
       "comando": "consulta_ia",
       "api_key": key,
       "mensaje": pregunta,
-      "analisis_puntual": datosEspecificos 
+      "analisis_puntual": datosLigeros // Enviamos la versión "Light"
     };
+    
     _enviarAlBackend(jsonEncode(orden));
   }
 
@@ -274,6 +305,30 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
           
           if (_offsetActual == 0) _tabController.animateTo(1); 
         } 
+        else if (tipo == 'sql_tablas') {
+             // contenido trae: {'tablas': ['t1', 't2'], 'ruta_temp': '/path/file.db'}
+             List<String> tablas = List<String>.from(contenido['tablas']);
+             String rutaDb = contenido['ruta_temp'];
+
+             showDialog(
+               context: context,
+               builder: (ctx) => SqlTableDialog(
+                 tablas: tablas,
+                 onSeleccionar: (tabla) {
+                   // Pedimos cargar la tabla específica
+                   var orden = {
+                     "comando": "sql",
+                     "accion": "cargar_tabla",
+                     "ruta": rutaDb,
+                     "tabla": tabla
+                   };
+                   _enviarAlBackend(jsonEncode(orden));
+                   _agregarLog("Cargando tabla '$tabla'...");
+                   setState(() => _cargando = true);
+                 },
+               )
+             );
+        }
         else if (tipo == 'tabla_resumen') {
              Map<String, dynamic> res = {
                'titulo': "Análisis #${_historialResultados.length + 1}",
@@ -283,6 +338,13 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
              _historialResultados.add(res);
              _irAResultados();
         }
+        else if (tipo == 'lista_datasets') {
+         // contenido trae {lista_datasets: [...], active_id: "..."}
+         setState(() {
+           _listaDatasets = List<String>.from(contenido['lista_datasets']);
+           _datasetActivo = contenido['active_id'];
+         });
+    }
         else if (tipo == 'html') {
              Map<String, dynamic> res = {
                'titulo': "Interactivo #${_historialResultados.length + 1}",
@@ -351,18 +413,44 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
     var orden = {"comando": "paginacion", "inicio": nuevoInicio, "limite": _filasPorPagina};
     _enviarAlBackend(jsonEncode(orden));
   }
-
+Future<void> _exportarWorkspaceExcel() async {
+    String? ruta = await FilePicker.platform.saveFile(
+      dialogTitle: 'Guardar Workspace Completo',
+      fileName: 'proyecto_completo.xlsx',
+      allowedExtensions: ['xlsx'],
+      type: FileType.custom,
+    );
+    if (ruta != null) {
+      if (!ruta.endsWith('.xlsx')) ruta += ".xlsx";
+      _enviarAlBackend(jsonEncode({"comando": "exportar_workspace", "ruta": ruta.replaceAll(r'\', r'/')}));
+    }
+  }
   Future<void> _cargarArchivo() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom, 
-      // AGREGAMOS LAS EXTENSIONES AQUÍ
-      allowedExtensions: ['csv', 'xlsx', 'xls', 'sav', 'dta', 'parquet'],
+      // Agregamos db y sqlite a la lista permitida
+      allowedExtensions: ['csv', 'xlsx', 'xls', 'sav', 'dta', 'parquet', 'db', 'sqlite'],
     );
     
     if (result != null) {
-      setState(() => _cargando = true);
-      String ruta = result.files.single.path!.replaceAll(r'\', r'/'); 
-      _enviarAlBackend("cargar $ruta");
+      String ruta = result.files.single.path!.replaceAll(r'\', r'/');
+      String ext = ruta.split('.').last.toLowerCase();
+
+      // SI ES SQL, INICIAMOS EL FLUJO DE CONEXIÓN
+      if (ext == 'db' || ext == 'sqlite') {
+        var orden = {
+          "comando": "sql",
+          "accion": "conectar",
+          "ruta": ruta
+        };
+        _enviarAlBackend(jsonEncode(orden));
+        _agregarLog("Conectando a base de datos...");
+      } 
+      // SI ES ARCHIVO NORMAL
+      else {
+        setState(() => _cargando = true);
+        _enviarAlBackend("cargar $ruta");
+      }
     }
   }
 
@@ -402,237 +490,248 @@ Future<void> _enviarConsultaIA(String pregunta, {String? apiKeyOverride, Map<Str
     }
   }
 
-  // --- GESTIÓN DE DIÁLOGOS Y MENÚS ---
   void _manejarClickMenu(String nombre, String comando) {
+    
+    // ---------------------------------------------------------
+    // GRUPO 1: COMANDOS QUE CARGAN DATOS (No requieren chequeo previo)
+    // ---------------------------------------------------------
     if (comando == "ejemplo_california") {
        _enviarAlBackend(jsonEncode({"comando": "cargar_ejemplo", "nombre": "california"}));
        _agregarLog("Solicitando California Housing...");
-       return; // Salimos de la función aquí
+       return; 
     }
     
     if (comando == "ejemplo_cancer") {
        _enviarAlBackend(jsonEncode({"comando": "cargar_ejemplo", "nombre": "cancer"}));
        _agregarLog("Solicitando Breast Cancer...");
-       return; // Salimos aquí
+       return; 
     }
 
-    // --- BARRERA DE SEGURIDAD ---
+    // ---------------------------------------------------------
+    // BARRERA DE SEGURIDAD (Si no hay datos, no dejar pasar)
+    // ---------------------------------------------------------
     if (_columnasDisponibles.isEmpty) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Carga un CSV primero.")));
       return;
     }
 
-    if (comando == "resumen") {
-      _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": "resumen"}));
-    } 
+    // ---------------------------------------------------------
+    // GRUPO 2: GESTIÓN DE DATOS Y MERGE
+    // ---------------------------------------------------------
+    
+    // --- AQUÍ ESTÁ EL MERGE QUE FALTABA ---
+    if (comando == "merge") {
+       showDialog(
+         context: context,
+         builder: (ctx) => MergeDialog(
+           datasetsDisponibles: _listaDatasets, // Pasamos la lista que tiene el main
+           datasetActivo: _datasetActivo ?? "Desconocido",
+           onEjecutar: (datasetB, colA, colB, tipo) {
+             var orden = {
+               "comando": "gestion_datasets", // O "ingenieria" segun tu backend
+               "accion": "merge",
+               "dataset_B": datasetB,
+               "col_A": colA,
+               "col_B": colB,
+               "tipo_join": tipo
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Fusionando con $datasetB ($tipo)...");
+           }
+         )
+       );
+    }
+    else if (comando == "crear_variable") {
+       showDialog(
+         context: context,
+         builder: (ctx) => FeatureEngineeringDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (params) {
+             var orden = {"comando": "transformacion", "accion": "crear_variable", ...params};
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Calculando variable...");
+           }
+         )
+       );
+    }
+    else if (comando == "concat") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ConcatDialog(
+           datasetsDisponibles: _listaDatasets,
+           datasetActivo: _datasetActivo ?? "",
+           onEjecutar: (dsB, eje) {
+             var orden = {"comando": "gestion_datasets", "accion": "concat", "dataset_B": dsB, "eje": eje};
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Concatenando...");
+           }
+         )
+       );
+    }
+    else if (comando == "subset_cols") {
+       // Reusamos CheckboxParamsDialog sin input numérico
+       showDialog(
+        context: context,
+        builder: (ctx) => CheckboxParamsDialog(
+          titulo: "Seleccionar Columnas a Mantener",
+          columnas: _columnasDisponibles,
+          showInput: false, 
+          onEjecutar: (varsSel, _, __) { 
+            var orden = {"comando": "gestion_datasets", "accion": "subset_cols", "variables": varsSel};
+            _enviarAlBackend(jsonEncode(orden));
+            _agregarLog("Extrayendo sub-dataset...");
+          },
+        ),
+      );
+    }
+    else if (comando == "filtrar") {
+       showDialog(
+         context: context,
+         builder: (ctx) => FilterDialog(
+           onEjecutar: (consulta) {
+             var orden = {"comando": "gestion_datasets", "accion": "filtrar", "consulta": consulta};
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Filtrando filas...");
+           }
+         )
+       );
+    }
     else if (comando == "limpieza_datos") {
        _enviarAlBackend(jsonEncode({"comando": "transformacion", "accion": "info_columnas"}));
        _agregarLog("Analizando salud del dataset...");
     }
-    // Gráficos
-    else if (comando == "histograma") {
-      _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 1);
+    else if (comando == "extraer_fecha") {
+       showDialog(
+         context: context,
+         builder: (ctx) => DateFeaturesDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (col) {
+             var orden = {"comando": "transformacion", "accion": "extraer_fecha", "columna": col};
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Generando variables temporales...");
+           }
+         )
+       );
     }
-    else if (comando == "scatter" || comando == "boxplot") {
-      _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
-    }
-    else if (comando == "svd" || comando == "apriori") {
-   showDialog(
-     context: context,
-     builder: (ctx) => RecoDialog(
-       columnas: _columnasDisponibles,
-       tipo: comando,
-       onEjecutar: (vars, param) {
-         var orden = {
-           "comando": "analisis", "tipo_analisis": comando, 
-           "variables": vars, "parametro_float": param
-         };
-         _enviarAlBackend(jsonEncode(orden));
-         _agregarLog("Ejecutando algoritmo de recomendación...");
-       }
-     )
-   );
-}
-    // Multivariado con parámetros
-    else if (["pca", "kmeans", "elbow", "tsne"].contains(comando)) {
-       _mostrarDialogoParams(nombre, comando);
-    }
-     else if (comando == "ml_training") {
+
+    // ---------------------------------------------------------
+    // GRUPO 3: MACHINE LEARNING (Con los 9 parámetros correctos)
+    // ---------------------------------------------------------
+    else if (comando == "ml_training") {
        showDialog(
          context: context,
          builder: (ctx) => MLTrainingDialog(
            columnas: _columnasDisponibles,
-           // Callback con 6 argumentos
            onEjecutar: (y, xList, algo, val, k, explicar, tipoProb, hp, split) {
              var orden = {
                "comando": "analisis",
                "tipo_analisis": "ml_training",
-               "y": y,
-               "x": xList,
-               "algoritmo": algo,
-               "validacion": val,
-               "k_folds": k,
-               "explicar": explicar,
-               "tipo_problema": tipoProb,
-               "hyperparams": hp,     // <--- Agregar al JSON
-               "train_split": split   // <--- Agregar al JSON
+               "y": y, "x": xList, "algoritmo": algo,
+               "validacion": val, "k_folds": k,
+               "explicar": explicar, "tipo_problema": tipoProb,
+               "hyperparams": hp, "train_split": split
              };
              _enviarAlBackend(jsonEncode(orden));
-             
              if (explicar) {
-                _agregarLog("Entrenando y calculando SHAP... (Lento)");
+               _agregarLog("Entrenando con SHAP... (Lento)");
              } else {
-                _agregarLog("Entrenando modelo ($algo)...");
+               _agregarLog("Entrenando modelo...");
              }
            }
          )
        );
     }
-     else if (comando == "prophet") {
+
+    // ---------------------------------------------------------
+    // GRUPO 4: SERIES DE TIEMPO
+    // ---------------------------------------------------------
+    else if (comando == "prophet") {
        showDialog(
          context: context,
          builder: (ctx) => ProphetDialog(
            columnas: _columnasDisponibles,
            onEjecutar: (f, v, pasos, freq) {
-             var orden = {
-               "comando": "analisis", 
-               "tipo_analisis": "prophet", 
-               "variables": [f, v],
-               "pasos": pasos,
-               "freq": freq
-             };
+             var orden = {"comando": "analisis", "tipo_analisis": "prophet", "variables": [f, v], "pasos": pasos, "freq": freq};
              _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Ejecutando Prophet (Esto puede tardar)...");
+             _agregarLog("Ejecutando Prophet...");
            }
          )
        );
     }
-    // Cluster Jerárquico (Tiene diálogo propio)
+    else if (comando == "arima") {
+       showDialog(
+         context: context,
+         builder: (ctx) => ArimaDialog(
+           columnas: _columnasDisponibles,
+           onEjecutar: (f, v, p, d, q, P, D, Q, m, pasos) {
+             var orden = {
+               "comando": "analisis", "tipo_analisis": "arima", 
+               "variables": [f, v], 
+               "p": p, "d": d, "q": q, "P": P, "D": D, "Q": Q, "m": m, "pasos": pasos
+             };
+             _enviarAlBackend(jsonEncode(orden));
+             _agregarLog("Ajustando SARIMA...");
+           }
+         )
+       );
+    }
+
+    // ---------------------------------------------------------
+    // GRUPO 5: ANÁLISIS VARIOS Y GRÁFICOS
+    // ---------------------------------------------------------
+    
+    else if (comando == "resumen") {
+      _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": "resumen"}));
+    } 
+    else if (comando == "histograma") {
+      _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 1);
+    }
+    else if (comando == "scatter" || comando == "boxplot" || comando == "scatter_web") {
+      _mostrarDialogoVariablesGenerico(nombre, comando, numVariables: 2);
+    }
+    else if (["pca", "kmeans", "elbow", "tsne"].contains(comando)) {
+       _mostrarDialogoParams(nombre, comando);
+    }
+    else if (comando == "svd" || comando == "apriori") {
+       showDialog(
+         context: context,
+         builder: (ctx) => RecoDialog(
+           columnas: _columnasDisponibles,
+           tipo: comando,
+           onEjecutar: (vars, param) {
+             var orden = {"comando": "analisis", "tipo_analisis": comando, "variables": vars, "parametro_float": param};
+             _enviarAlBackend(jsonEncode(orden));
+           }
+         )
+       );
+    }
     else if (comando == "jerarquico") {
        showDialog(
          context: context,
          builder: (ctx) => HierarchicalDialog(
            columnas: _columnasDisponibles,
            onEjecutar: (vars, metodo, k) {
-             var orden = {
-               "comando": "analisis",
-               "tipo_analisis": "jerarquico",
-               "variables": vars,
-               "metodo": metodo,
-               "parametro": k 
-             };
+             var orden = {"comando": "analisis", "tipo_analisis": "jerarquico", "variables": vars, "metodo": metodo, "parametro": k};
              _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Calculando Dendrograma ($metodo)...");
            }
          )
        );
     }
-    // PLOTLY 3D
-    else if (comando == "scatter_3d") {
-       showDialog(
-         context: context,
-         builder: (ctx) => ThreeVarsDialog(
-           columnas: _columnasDisponibles,
-           onEjecutar: (x, y, z, color) {
-             List<String> vars = [x, y, z];
-             if (color != null) vars.add(color);
-             
-             // Enviamos al backend
-             var orden = {
-               "comando": "analisis", 
-               "tipo_analisis": "scatter_3d", 
-               "variables": vars
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Generando 3D...");
-           }
-         )
-       );
-    }
-    // DIAGNÓSTICO (ACF/PACF, Periodograma, ADF) -> 2 Variables (Fecha, Valor)
-    else if (["acf_pacf", "periodograma", "adf_test", "descomposicion"].contains(comando)) {
-       _mostrarDialogoVariablesSimple("Configuración (Var 1=Fecha, Var 2=Serie)", comando);
-    }
-    
-    // CAUSALIDAD GRANGER (3 Variables)
-    else if (comando == "granger") {
-       // Usamos ThreeVarsDialog (que ya tienes) o DoeDialog. 
-       // Usaré ThreeVarsDialog porque permite "Color opcional" que ignoraremos.
-       // Lo ideal sería un dialogo específico "GrangerDialog", pero esto funciona:
-       showDialog(
-         context: context,
-         builder: (ctx) => ThreeVarsDialog(
-           columnas: _columnasDisponibles,
-           onEjecutar: (fecha, causa, efecto, _) { // Ignoramos el 4to
-             var orden = {
-               "comando": "analisis", 
-               "tipo_analisis": "granger", 
-               "variables": [fecha, causa, efecto]
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Calculando Causalidad...");
-           }
-         )
-       );
-       // Nota visual para el usuario: En ThreeVarsDialog:
-       // X = Fecha
-       // Y = Variable Causa
-       // Z = Variable Efecto
-    }
-    // ARIMA
-else if (comando == "arima") {
-       showDialog(
-         context: context,
-         builder: (ctx) => ArimaDialog(
-           columnas: _columnasDisponibles,
-           // Recibimos todos los parametros nuevos
-           onEjecutar: (f, v, p, d, q, P, D, Q, m, pasos) {
-             var orden = {
-               "comando": "analisis", "tipo_analisis": "arima", 
-               "variables": [f, v], 
-               "p": p, "d": d, "q": q,
-               "P": P, "D": D, "Q": Q, "m": m,
-               "pasos": pasos
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Ajustando modelo SARIMA...");
-           }
-         )
-       );
-    }
-// ADF y Descomposición (Necesitan Fecha y Valor -> 2 variables)
-else if (comando == "adf_test" || comando == "descomposicion") {
-   // Usamos el dialogo simple, pero mentalmente el usuario debe saber:
-   // Var 1 = Fecha, Var 2 = Valor
-   // O MEJOR: Creamos un dialogo rapido ad-hoc aqui mismo o reusamos ArimaDialog simplificado
-   // Usemos el simple por ahora con la instruccion clara:
-   _mostrarDialogoVariablesSimple("Configuración (Var 1=Fecha, Var 2=Valor)", comando);
-}
-    // PLOTLY 2D WEB
-    else if (comando == "scatter_web") {
-       _mostrarDialogoVariablesGenerico("Scatter Web", "scatter_web", numVariables: 2);
-    }
-    // Regresiones y Clasificación
     else if (["ols_multiple", "logit", "roc_analysis"].contains(comando)) {
        _mostrarDialogoMultiVariable(nombre, comando);
     } 
-    // Heatmap (Checkbox sin input numérico)
-    else if (comando == "heatmap") {
+    else if (comando == "heatmap" || comando == "spearman") {
        showDialog(
         context: context,
         builder: (ctx) => CheckboxParamsDialog(
-          titulo: "Variables para Matriz",
-          columnas: _columnasDisponibles,
-          showInput: false, 
-          onEjecutar: (varsSel, _) { 
-            var orden = {"comando": "analisis", "tipo_analisis": "heatmap", "variables": varsSel};
+          titulo: nombre, columnas: _columnasDisponibles, showInput: false, 
+          onEjecutar: (varsSel, _, __) { 
+            var orden = {"comando": "analisis", "tipo_analisis": comando, "variables": varsSel};
             _enviarAlBackend(jsonEncode(orden));
-            _agregarLog("Generando Heatmap...");
           },
         ),
       );
     }
-    // Configuración Global
     else if (comando == "config_graficos") {
        showDialog(
          context: context,
@@ -644,138 +743,36 @@ else if (comando == "adf_test" || comando == "descomposicion") {
          )
        );
     }
-        // DISEÑO DE EXPERIMENTOS (DoE)
     else if (comando == "anova_2way") {
        showDialog(
          context: context,
          builder: (ctx) => DoeDialog(
            columnas: _columnasDisponibles,
            onEjecutar: (respuesta, factorA, factorB) {
-             var orden = {
-               "comando": "analisis",
-               "tipo_analisis": "anova_2way",
-               // Enviamos las 3 variables en orden: [Y, F1, F2]
-               "variables": [respuesta, factorA, factorB]
-             };
+             var orden = {"comando": "analisis", "tipo_analisis": "anova_2way", "variables": [respuesta, factorA, factorB]};
              _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Calculando ANOVA Factorial e Interacciones...");
            }
          )
        );
     }
-    // NO PARAMÉTRICOS (Wilcoxon es pareada -> 2 vars)
-    else if (comando == "wilcoxon") {
-       _mostrarDialogoVariablesSimple("Wilcoxon (Pareada)", comando);
-    }
-    // Spearman (Matriz -> Multiples vars -> CheckboxDialog sin input)
-    else if (comando == "spearman") {
-        showDialog(
-        context: context,
-        builder: (ctx) => CheckboxParamsDialog(
-          titulo: "Variables para Spearman",
-          columnas: _columnasDisponibles,
-          showInput: false, 
-          onEjecutar: (varsSel, _) { 
-            var orden = {"comando": "analisis", "tipo_analisis": "spearman", "variables": varsSel};
-            _enviarAlBackend(jsonEncode(orden));
-          },
-        ),
-      );
-    }
-    // CASO 1 VARIABLE (Normalidad)
-    else if (comando == "normalidad") {
-       _mostrarDialogoVariablesGenerico("Test de Normalidad", comando, numVariables: 1);
-    }
-    
-    // CASO 2 VARIABLES (Levene, Tukey)
-    else if (comando == "levene" || comando == "tukey") {
-       // Reutilizamos el dialogo simple, idealmente cambiando los labels si quisieras pulir UX
-       _mostrarDialogoVariablesSimple(nombre, comando);
-    }
-    else if (comando == "crear_variable") {
-       showDialog(
-         context: context,
-         builder: (ctx) => FeatureEngineeringDialog(
-           columnas: _columnasDisponibles,
-           onEjecutar: (params) {
-             var orden = {
-               "comando": "transformacion", 
-               "accion": "crear_variable",
-               ...params // Expandimos el mapa de parámetros (spread operator)
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Calculando nueva variable...");
-           }
-         )
-       );
-    }
-    else if (comando == "extraer_fecha") {
-       showDialog(
-         context: context,
-         builder: (ctx) => DateFeaturesDialog(
-           columnas: _columnasDisponibles,
-           onEjecutar: (col) {
-             var orden = {
-               "comando": "transformacion", 
-               "accion": "extraer_fecha",
-               "columna": col
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Generando variables temporales...");
-           }
-         )
-       );
-    }
-    // PARAMÉTRICOS Y CATEGÓRICOS (Requieren 2 variables)
-    else if (["anova", "ttest_ind", "ttest_rel", "chi2", "fisher"].contains(comando)) {
-       
-       String label1 = "Variable 1";
-       String label2 = "Variable 2";
-       
-       // Personalizamos etiquetas para mejor UX
-       if (comando == "anova" || comando == "ttest_ind") {
-         label1 = "Variable Numérica";
-         label2 = "Variable de Grupo (Factor)";
-       } else if (comando == "chi2" || comando == "fisher") {
-         label1 = "Variable Fila (Categórica)";
-         label2 = "Variable Columna (Categórica)";
-       } else if (comando == "ttest_rel") {
-         label1 = "Medición Antes (Num)";
-         label2 = "Medición Después (Num)";
-       }
-
-       // Usamos el diálogo genérico pero le cambiamos los labels si tu implementación lo permite,
-       // o usamos el simple. Para rapidez, usemos el simple que ya tenías:
-       _mostrarDialogoVariablesSimple(nombre, comando);
-       // Nota: Si quieres cambiar los labels, tendrás que modificar _mostrarDialogoVariablesSimple
-       // para que acepte label1 y label2 como argumentos. ¡Es una buena mejora!
-    }
-    else if (comando == "kaplan_meier") {
+    else if (comando == "scatter_3d" || comando == "granger" || comando == "kaplan_meier") {
        showDialog(
          context: context,
          builder: (ctx) => ThreeVarsDialog(
            columnas: _columnasDisponibles,
-           // Mapeo mental para el usuario:
-           // X -> Variable de TIEMPO (Duración)
-           // Y -> Variable de EVENTO (0/1, Muerte/Fallo)
-           // Z -> Variable de GRUPO (Tratamiento/Control)
-           // color -> Ignorado
-           onEjecutar: (tiempo, evento, grupo, _) { 
-             
-             // Preparamos la lista en el orden que espera el backend: [Tiempo, Evento, Grupo]
-             var varsToSend = [tiempo, evento, grupo];
-             
-             var orden = {
-               "comando": "analisis",
-               "tipo_analisis": "kaplan_meier",
-               "variables": varsToSend
-             };
-             _enviarAlBackend(jsonEncode(orden));
-             _agregarLog("Calculando curvas de supervivencia (K-M)...");
+           onEjecutar: (x, y, z, color) {
+             List<String> vars = [x, y, z];
+             if (color != null && comando == "scatter_3d") vars.add(color);
+             _enviarAlBackend(jsonEncode({"comando": "analisis", "tipo_analisis": comando, "variables": vars}));
            }
          )
        );
     }
+    else if (["acf_pacf", "periodograma", "adf_test", "descomposicion"].contains(comando)) {
+       _mostrarDialogoVariablesSimple("Configuración (Var 1=Fecha, Var 2=Serie)", comando);
+    }
+    
+    // --- DEFAULT ---
     else {
       _mostrarDialogoVariablesSimple(nombre, comando);
     }
@@ -818,11 +815,21 @@ else if (comando == "adf_test" || comando == "descomposicion") {
         labelParametro: labelParam,
         valorDefecto: valDefecto,
         showInput: inputVisible,
-        onEjecutar: (varsSel, param) {
-          var orden = {"comando": "analisis", "tipo_analisis": comando, "variables": varsSel, "parametro": param};
+        
+        // --- AQUÍ ESTÁ EL CAMBIO EN EL MAIN ---
+        // Ahora recibimos 3 variables: varsSel, param, guardar
+        onEjecutar: (varsSel, param, guardar) {
+          var orden = {
+            "comando": "analisis",
+            "tipo_analisis": comando,
+            "variables": varsSel,
+            "parametro": param,
+            "guardar": guardar // <--- Enviamos esto al backend
+          };
           _enviarAlBackend(jsonEncode(orden));
           _agregarLog("Ejecutando $nombre...");
         },
+        // --------------------------------------
       ),
     );
   }
@@ -920,36 +927,80 @@ else if (comando == "adf_test" || comando == "descomposicion") {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+  appBar: AppBar(
         title: Row(
           children: [
-            const Text("OpenStata Evolution"),
+            const Text("OpenStata", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(width: 10),
+            
+            // Indicador de conexión
             Tooltip(
               message: _conectado ? "Conectado" : "Buscando...",
               child: Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: _conectado ? Colors.green : Colors.redAccent))
-            )
+            ),
+
+            const SizedBox(width: 20), // Separador
+
+            // --- NUEVO: SELECTOR DE DATASETS ---
+            // Solo se muestra si hay datasets cargados
+            if (_listaDatasets.isNotEmpty)
+              Container(
+                height: 35, // Altura compacta
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(20), // Bordes redondeados
+                  border: Border.all(color: Colors.grey.shade300)
+                ),
+                child: DropdownButtonHideUnderline( // Quita la línea fea de abajo
+                  child: DropdownButton<String>(
+                    value: _datasetActivo,
+                    icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
+                    style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500, fontSize: 13),
+                    // Mapeamos la lista de strings a items del menú
+                    items: _listaDatasets.map((ds) {
+                      // Cortamos el nombre si es muy largo para que no rompa la barra
+                      String nombreCorto = ds.length > 25 ? "${ds.substring(0, 22)}..." : ds;
+                      return DropdownMenuItem(
+                        value: ds,
+                        child: Text(nombreCorto),
+                      );
+                    }).toList(),
+                    onChanged: (nuevoDs) {
+                      if (nuevoDs != null && nuevoDs != _datasetActivo) {
+                        _cambiarDatasetActivo(nuevoDs);
+                      }
+                    },
+                  ),
+                ),
+              ),
+            // ------------------------------------
           ],
         ),
         backgroundColor: Colors.white,
         elevation: 1,
         actions: [
-          // BOTONES DE ACCIÓN
+          // BOTONES DE ACCIÓN (Igual que antes)
           IconButton(icon: const Icon(Icons.save_alt, color: Colors.green), onPressed: _exportarDataset, tooltip: "Guardar CSV"),
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.redAccent), onPressed: _exportarReportePDF, tooltip: "Guardar PDF"),
           const SizedBox(width: 10),
           
-          // BOTÓN DE IA (TOGGLE)
-          // Ahora este botón muestra u oculta el panel lateral sin bloquear
+          // BOTÓN DE IA
           IconButton(
             icon: Icon(Icons.auto_awesome, color: _mostrarPanelIA ? Colors.purple : Colors.grey),
-            tooltip: "Asistente IA (Mostrar/Ocultar)",
+            tooltip: "Asistente IA",
             onPressed: () => setState(() => _mostrarPanelIA = !_mostrarPanelIA),
           ),
           
           const SizedBox(width: 10),
           IconButton(icon: const Icon(Icons.folder_open, color: Colors.blueAccent), onPressed: _cargarArchivo, tooltip: "Abrir CSV"),
           const SizedBox(width: 15),
+           IconButton(
+            icon: const Icon(Icons.table_view, color: Colors.greenAccent), 
+            tooltip: "Guardar Workspace (Excel Multi-hoja)",
+            onPressed: _exportarWorkspaceExcel,
+          ),
+         
         ],
       ),
       

@@ -33,9 +33,14 @@ class SidebarMenu extends StatelessWidget {
             _crearOpcion("Scatter 3D (Rotable)", "scatter_3d"),
             _crearOpcion("Scatter 2D (Web)", "scatter_web"),]),
           _crearAcordeon("Gestión de Datos", Icons.build, [
+            _crearOpcion("Unir Datasets (Merge/Join)", "merge"), 
             _crearOpcion("Crear / Transformar Variables", "crear_variable"), // NUEVO
             _crearOpcion("Limpieza Inteligente", "limpieza_datos"),
-            _crearOpcion("Descomponer Fechas (Time Features)", "extraer_fecha"), // NUEVO
+            _crearOpcion("Descomponer Fechas (Time Features)", "extraer_fecha"),
+            _crearOpcion("Concatenar (Apilar)", "concat"),
+            _crearOpcion("Extraer Sub-Dataset (Columnas)", "subset_cols"),
+            _crearOpcion("Filtrar Datos (Filas)", "filtrar"),
+             // NUEVO
                   ]),
           
           _crearAcordeon("Estadística Descriptiva", Icons.analytics, [
